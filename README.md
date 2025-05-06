@@ -2,10 +2,6 @@
 
 This project was developed for the COMP 380 Neural Networks class to help Alzheimer's patients recognize family members and close friends through face recognition technology.
 
-## Personal Motivation
-
-After watching my grandmother struggle with Alzheimer's and repeatedly not recognizing family members, I wanted to create a system that could help patients maintain connections with their loved ones. This system identifies faces in images and provides the names of people the patient knows, offering a bridge between memory loss and personal relationships.
-
 ## Features
 
 - **Multiple Face Recognition Models**: 

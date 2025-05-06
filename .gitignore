@@ -67,6 +67,14 @@ coverage.xml
 *~
 .history/
 .vim/
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/extensions.json
+.idea/workspace.xml
+.idea/tasks.xml
+.emacs.d/
+.zed/
+.codium/
 
 # Personal files & notes
 .scratch/
@@ -79,6 +87,18 @@ scratch/
 .my_experiments/
 .profile.json
 .myconfig.ini
+research_papers/
+saved_models/
+experiments_v1/
+experiments_v2/
+temp_fix_*
+*_BACKUP_*
+*_LOCAL_*
+broken_features/
+model_checkpoints/
+results_old/
+henry_todo.txt
+project_notes/
 
 # Keep certain directories but ignore their contents
 standalone_face_recognition/data/raw/.gitkeep

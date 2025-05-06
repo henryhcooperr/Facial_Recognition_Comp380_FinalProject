@@ -8,12 +8,19 @@ After watching my grandmother struggle with Alzheimer's and repeatedly not recog
 
 ## Features
 
-- **Multiple Face Recognition Models**: Baseline CNN, Transfer learning with ResNet18, Siamese networks, Attention mechanisms, ArcFace, and hybrid CNN-Transformer architectures
-- **Automatic Dataset Management**: Downloads and organizes celebrity and face recognition datasets
-- **Interactive Menu**: Easy-to-use interface for all functions
-- **Data Preprocessing**: Includes face detection, alignment, and data augmentation
-- **Model Training & Evaluation**: Train models with customizable parameters and evaluate their performance
-- **Hyperparameter Tuning**: Automatically find optimal model configurations
+- **Multiple Face Recognition Models**: 
+  - Baseline CNN (my first working version)
+  - Transfer learning with ResNet18 (most reliable so far)
+  - Siamese networks (worked well with limited data)
+  - Attention mechanisms (experimental, seems promising)
+  - ArcFace (added after reading paper, good for hard examples)
+  - Hybrid CNN-Transformer (still debugging this one)
+
+- **Automatic Dataset Management**: Downloads and organizes celebrity and face recognition datasets (spent way too much time on this part!)
+- **Interactive Menu**: Easy-to-use interface for all functions (makes demo easier)
+- **Data Preprocessing**: Face detection, alignment, and data augmentation
+- **Model Training & Evaluation**: Customizable parameters
+- **Hyperparameter Tuning**: Uses Optuna to find optimal settings
 
 ## Installation
 
@@ -54,6 +61,7 @@ The system can automatically download the following datasets:
 
 1. **Celebrity Faces Dataset**: 18 celebrities with ~100 images each
 2. **Face Recognition Dataset**: Multiple subjects with varying numbers of images
+3. **LFW Dataset**: Huge dataset, but takes a while to download
 
 When you first run the data processing, the system will automatically download these datasets if they are not already present.
 
@@ -65,13 +73,13 @@ The system can also be used from the command line:
 # Process raw data
 python run.py preprocess
 
-# Train a model
+# Train a model (CNN is fastest but ResNet is more accurate)
 python run.py train --model-type cnn --batch-size 32 --epochs 50
 
 # Evaluate a model
 python run.py evaluate --model-type cnn
 
-# Tune hyperparameters
+# Tune hyperparameters (warning: takes a long time!)
 python run.py tune --model-type cnn --n-trials 50
 
 # Check GPU availability
@@ -79,6 +87,9 @@ python run.py check-gpu
 
 # List trained models
 python run.py list-models
+
+# Run the unit tests
+python -m unittest discover -s tests
 ```
 
 ## Project Structure
@@ -106,16 +117,9 @@ python run.py list-models
 └── run.py                  # Main entry point
 ```
 
-## Development Journey
 
-I started with a simple CNN classifier, but as I learned more about neural networks, I expanded the project to include more sophisticated architectures. I spent significant time experimenting with hyperparameters, data augmentation techniques, and different model architectures to improve recognition accuracy.
 
-## Future Improvements
 
-- Mobile app integration for real-time recognition
-- Emotion detection to provide context about the person's mood
-- Voice synthesis to speak the person's name and relationship
-- Memory assistance by providing relevant personal facts about the recognized person
 
 ## License
 

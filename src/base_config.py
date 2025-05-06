@@ -14,6 +14,15 @@ OUT_DIR = PROJECT_ROOT / "outputs"  # shortened this
 CHECKPOINTS_DIR = OUT_DIR / "checkpoints"
 VIZ_DIR = OUT_DIR / "visualizations"  
 
+# Added these after I kept typing the wrong paths - lazy but effective
+TRAIN_DIR = PROC_DATA_DIR / "train"
+VAL_DIR = PROC_DATA_DIR / "val"
+TEST_DIR = PROC_DATA_DIR / "test"
+
+# For kaggle datasets
+CELEB_DIR = RAW_DATA_DIR / "celebrity_faces"
+LFW_DIR = RAW_DATA_DIR / "lfw"
+
 # Model parameters I've tuned through trial and error
 # Smaller batch size helped with my limited dataset
 DEFAULT_BATCH_SIZE = 16  # was 32 but got OOM errors on my laptop
@@ -21,13 +30,15 @@ DEFAULT_EPOCHS = 50
 DEFAULT_LR = 1e-3  # 0.001 seems to work well for most models
 IMG_SIZE = 224  # This is what ResNet expects
 
+# These worked better for siamese networks
+# SIAMESE_BATCH = 24
+# SIAMESE_LR = 5e-4  # Lowered this after getting NaN losses
+
 # Make sure all our directories exist
 # This annoyed me to no end when things failed silently
 for dir_path in [RAW_DATA_DIR, PROC_DATA_DIR, MODELS_DIR, 
                 CHECKPOINTS_DIR, VIZ_DIR,
-                PROC_DATA_DIR / "train",
-                PROC_DATA_DIR / "val",
-                PROC_DATA_DIR / "test"]:
+                TRAIN_DIR, VAL_DIR, TEST_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # Configure logging - super helpful for debugging
@@ -54,8 +65,34 @@ def get_user_confirmation(prompt: str = "Continue? (y/n): ") -> bool:
         else:
             print("Please enter 'y' or 'n'")
 
+# Quick utility to check if we have a GPU available
+def check_gpu():
+    """Print GPU info if available."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device_count = torch.cuda.device_count()
+            for i in range(device_count):
+                logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            return True
+        else:
+            logger.info("No GPU available, using CPU")
+            return False
+    except ImportError:
+        logger.warning("PyTorch not installed, cannot check GPU")
+        return False
+
 # Old validation split function I replaced - keeping for reference
 # def split_dataset(data_dir, train=0.7, val=0.2, test=0.1):
 #     """Split dataset into train/val/test."""
 #     assert abs(train + val + test - 1.0) < 1e-8, "Ratios must sum to 1"
 #     # rest of function... 
+
+# First attempt at the function to generate model filename 
+# def get_model_filename(model_type, accuracy=None):
+#     """Generate filename for model checkpoint."""  
+#     import time
+#     timestamp = int(time.time())
+#     if accuracy:
+#         return f"{model_type}_{timestamp}_{accuracy:.4f}.pth"
+#     return f"{model_type}_{timestamp}.pth" 

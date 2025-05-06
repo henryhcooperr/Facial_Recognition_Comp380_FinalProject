@@ -1,4 +1,5 @@
-# app.py
+# app.py - Streamlit interface for real-time face recognition
+# Started: 4/10/2025 - Actually got it working: 4/16/2025 (many late nights)
 import streamlit as st
 import torch
 import torchvision.transforms as transforms
@@ -12,7 +13,7 @@ import pickle
 from queue import Queue, Empty
 from facenet_pytorch import MTCNN, InceptionResnetV1
 
-# Configs and constants
+# Configs and constants - tweaked through trial and error
 # Bumped detection threshold from 0.8 to 0.9 to reduce false positives
 DET_THRESH = 0.9  
 # Initially tried 0.7 but got too many false matches - 1.0 seems like a good balance
@@ -24,8 +25,12 @@ REF_FILE = os.path.join(REF_DIR, "face_references.pkl")
 os.makedirs(REF_DIR, exist_ok=True)
 _save_counter = 0  # Simple counter for unique filenames
 
+# FIXME: Sometimes the camera feed freezes after ~5min of running
+# Might be a memory leak or threading issue - need to investigate
+
 # Face processing functions
 def get_embedding(face_img, model):
+    """Extract face embedding using the model"""
     if face_img is None or face_img.size == 0: return None
     try:
         # Had issues with color format conversion - be explicit about BGR to RGB
@@ -58,12 +63,15 @@ def compare_faces(emb, refs, thresh):
 
 # file operations
 def save_refs(refs):
+    """Save reference faces to disk - had to debug this a lot"""
     global _save_counter
     try:
         saveable_refs = []
         for ref in refs:
             _save_counter += 1
-            img_file = f"{ref['name'].replace(' ', '_')}_{_save_counter}.jpg"
+            # Actually better to create unique names with counter
+            # Fixed bug where same-named people would overwrite each other
+            img_file = f"{ref['name'].replace(' ', '_')}_{_save_counter:08x}.jpg"
             img_path = os.path.join(REF_DIR, img_file)
             if cv2.imwrite(img_path, ref['image']):
                 saveable_refs.append({
@@ -79,6 +87,17 @@ def save_refs(refs):
     except Exception as e:
         st.error(f"Error saving references: {e}")
         return False
+
+# Old version - don't use, had issues with paths
+# def save_refs_v1(refs):
+#     """Save reference faces to disk."""
+#     try:
+#         with open(REF_FILE, 'wb') as f:
+#             pickle.dump(refs, f)
+#         return True
+#     except Exception as e:
+#         st.error(f"Error saving references: {e}")
+#         return False
 
 def load_refs():
     if not os.path.exists(REF_FILE): return []

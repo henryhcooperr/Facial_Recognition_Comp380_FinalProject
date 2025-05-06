@@ -80,10 +80,9 @@ def interactive_menu():
         print("4. Tune Hyperparameters")
         print("5. List Processed Datasets")
         print("6. List Trained Models")
-        print("7. Run Tests")
-        print("8. Exit")
+        print("7. Exit")
         
-        choice = input("\nEnter your choice (1-8): ")
+        choice = input("\nEnter your choice (1-7): ")
         
         if choice == '1':
             print("\nData Processing")
@@ -302,11 +301,6 @@ def interactive_menu():
                         print(f"- {model_dir.name}")
         
         elif choice == '7':
-            print("\nRunning Tests...")
-            print("Please run the tests using unittest from the command line:")
-            print("python -m unittest discover -s tests")
-            
-        elif choice == '8':
             print("\nGoodbye!")
             break
         

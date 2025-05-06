@@ -10,7 +10,17 @@ import random
 import sys
 
 # Get the proper paths from the main config
-from .base_config import RAW_DATA_DIR, logger
+# Fix the import to work when executed directly as a script
+import sys
+import os
+from pathlib import Path
+
+# Add the parent directory to sys.path
+project_dir = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_dir))
+
+# Now we can import from src
+from src.base_config import RAW_DATA_DIR, logger
 
 # Get project root directory
 project_dir = Path(__file__).resolve().parent.parent

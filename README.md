@@ -117,8 +117,19 @@ python -m unittest discover -s tests
 └── run.py                  # Main entry point
 ```
 
+## Development Journey
 
+I started this project with high ambitions but quickly faced reality - deep learning is hard! My journey went something like this:
 
+1. **First attempt**: Just a simple CNN trained from scratch. Worked OK but overfitted quickly.
+
+2. **Learning about transfer learning**: Discovered ResNet18 pretrained models - what a difference! Suddenly my accuracy jumped from 63% to 87%.
+
+3. **Data challenges**: Dealing with imbalanced datasets was a pain. Tried oversampling, undersampling, and finally settled on a combination of data augmentation + class weights.
+
+4. **My first all-nighter**: Spent all night fixing a mysterious bug where validation accuracy would randomly drop to 0%. Turned out to be a subtle issue with my data loader.
+
+5. **Discovering Siamese networks**: After reading up on face recognition literature, I implemented a Siamese network for one-shot learning. This was a game-changer for handling new faces with limited examples.
 
 
 ## License

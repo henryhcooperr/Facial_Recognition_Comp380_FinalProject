@@ -106,7 +106,8 @@ def main():
     elif args.cmd == 'preprocess':
         # FIXME: sometimes face detection fails on certain images - need to add better error handling
         config = get_preprocessing_config()
-        process_raw_data(config, test_mode=args.test)
+        from .base_config import RAW_DATA_DIR, PROC_DATA_DIR
+        process_raw_data(RAW_DATA_DIR, PROC_DATA_DIR, config=config, test_mode=args.test)
     
     elif args.cmd == 'train':
         # training params I found work well after lots of experiments

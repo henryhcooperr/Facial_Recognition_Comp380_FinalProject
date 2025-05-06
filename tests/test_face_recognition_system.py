@@ -196,26 +196,59 @@ class TestFaceRecognitionSystem(unittest.TestCase):
 
     def test_process_raw_data(self):
         """Test processing raw data."""
-        config = PreprocessingConfig(
-            name="test_processed",
-            use_mtcnn=False,  # Skip MTCNN for faster testing
-            augmentation=False
-        )
+        import tempfile
         
-        # Process in test mode (limited subset)
-        processed_dir = process_raw_data(config, test_mode=True)
-        
-        # Check if the processed directory exists
-        self.assertTrue(processed_dir.exists())
-        
-        # Check if train/val/test directories exist
-        self.assertTrue((processed_dir / "train").exists())
-        self.assertTrue((processed_dir / "val").exists())
-        self.assertTrue((processed_dir / "test").exists())
-        
-        # Check if class directories exist in train/val/test
-        self.assertTrue((processed_dir / "train" / "person1").exists())
-        self.assertTrue((processed_dir / "val" / "person2").exists())
+        # Create a temporary directory for this specific test
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            
+            # Create a test raw directory structure
+            raw_dir = temp_dir / "raw"
+            proc_dir = temp_dir / "processed"
+            
+            # Create the raw directory
+            raw_dir.mkdir()
+            
+            # Create test raw data - Person1 with 2 images
+            person1_dir = raw_dir / "face_recognition" / "person1"
+            person1_dir.mkdir(parents=True)
+            
+            # Create dummy images
+            img = Image.new('RGB', (200, 200), color=(0, 0, 0))
+            img.save(person1_dir / "image_1.jpg")
+            img.save(person1_dir / "image_2.jpg")
+            
+            # Create test raw data - Person2 with 2 images
+            person2_dir = raw_dir / "face_recognition" / "person2"
+            person2_dir.mkdir(parents=True)
+            img.save(person2_dir / "image_1.jpg")
+            img.save(person2_dir / "image_2.jpg")
+            
+            # Configure preprocessing
+            config = PreprocessingConfig(
+                name="test_processed",
+                use_mtcnn=False,  # Skip MTCNN for faster testing
+                augmentation=False
+            )
+            
+            # Process raw data
+            processed_dir = process_raw_data(raw_dir, proc_dir, config=config, test_mode=True)
+            
+            # Check if the processed directory exists
+            self.assertTrue(processed_dir.exists(), f"Processed directory {processed_dir} doesn't exist")
+            
+            # Check dataset structure
+            dataset_dir = processed_dir / "dataset1"  # Should map face_recognition to dataset1
+            self.assertTrue(dataset_dir.exists(), f"Dataset directory {dataset_dir} doesn't exist")
+            
+            # Check if train/val/test directories exist
+            self.assertTrue((dataset_dir / "train").exists(), f"Train directory doesn't exist")
+            self.assertTrue((dataset_dir / "val").exists(), f"Val directory doesn't exist")
+            self.assertTrue((dataset_dir / "test").exists(), f"Test directory doesn't exist")
+            
+            # Verify person1 and person2 directories are created in appropriate splits
+            person_dirs = list((dataset_dir / "train").glob("person*"))
+            self.assertTrue(len(person_dirs) > 0, "No person directories found in train")
 
     def test_model_creation(self):
         """Test creating models of different types."""

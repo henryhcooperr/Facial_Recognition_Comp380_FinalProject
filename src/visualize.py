@@ -73,8 +73,14 @@ def plot_tsne_embeddings(model: torch.nn.Module, dataset,
     
     plt.title('t-SNE visualization of face embeddings')
     plt.tight_layout()
-    plt.savefig(Path(output_dir) / model_name / 'tsne_embeddings.png', 
-                bbox_inches='tight')
+    
+    # Create the output directory structure if it doesn't exist
+    save_dir = Path(output_dir)
+    if model_name:
+        save_dir = save_dir / model_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.savefig(save_dir / 'tsne_embeddings.png', bbox_inches='tight')
     plt.close()
 
 def plot_attention_maps(model: torch.nn.Module, dataset, 
@@ -189,7 +195,14 @@ def plot_attention_maps(model: torch.nn.Module, dataset,
         return
     
     plt.tight_layout()
-    plt.savefig(Path(output_dir) / model_name / 'attention_maps.png')
+    
+    # Create the output directory structure if it doesn't exist
+    save_dir = Path(output_dir)
+    if model_name:
+        save_dir = save_dir / model_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.savefig(save_dir / 'attention_maps.png')
     plt.close()
 
 def plot_embedding_similarity(model: torch.nn.Module, dataset, output_dir: str, model_name: str):
@@ -246,7 +259,14 @@ def plot_embedding_similarity(model: torch.nn.Module, dataset, output_dir: str, 
                 xticklabels=class_names, yticklabels=class_names)
     plt.title('Embedding Similarity Between Classes')
     plt.tight_layout()
-    plt.savefig(Path(output_dir) / model_name / 'embedding_similarity.png')
+    
+    # Create the output directory structure if it doesn't exist
+    save_dir = Path(output_dir)
+    if model_name:
+        save_dir = save_dir / model_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.savefig(save_dir / 'embedding_similarity.png')
     plt.close()
 
 def plot_learning_curves(train_losses: List[float], val_losses: List[float], 
@@ -270,7 +290,15 @@ def plot_learning_curves(train_losses: List[float], val_losses: List[float],
     ax2.legend()
     
     plt.tight_layout()
-    plt.savefig(Path(output_dir) / model_name / 'learning_curves.png')
+    
+    # Create the output directory structure if it doesn't exist
+    save_dir = Path(output_dir)
+    if model_name:
+        save_dir = save_dir / model_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save the figure to the created directory
+    plt.savefig(save_dir / 'learning_curves.png')
     plt.close()
 
 def visualize_batch_augmentations(dataset, num_samples: int = 5, output_dir: str = None):

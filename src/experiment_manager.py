@@ -21,6 +21,7 @@ import torch.nn as nn
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 from sklearn.manifold import TSNE
 import torch.nn.functional as F
+import random
 
 from .base_config import PROJECT_ROOT, CHECKPOINTS_DIR, OUT_DIR, logger
 from .data_prep import PreprocessingConfig, process_raw_data
@@ -1248,10 +1249,14 @@ class ResultsManager:
         with open(curves_path, 'w') as f:
             json.dump(curves_data, f, indent=2)
         
-        # Create visualization
-        output_path = str(self.plots_dir / f"learning_curves_{self.config.experiment_id}.png")
-        plot_learning_curves(train_losses, val_losses, accuracies, 
-                          str(self.plots_dir), self.config.experiment_id)
+        # Create visualization - use the plots_dir directly as the base directory
+        plot_learning_curves(
+            train_losses, 
+            val_losses, 
+            accuracies, 
+            str(self.plots_dir), 
+            self.config.experiment_id
+        )
         
         # Track learning curves if configured
         if self.tracker and self.config.track_artifacts:
@@ -1648,8 +1653,20 @@ class ExperimentManager:
             # Import resource monitoring utilities
             from .advanced_metrics import TimerContext, ResourceMonitor
             
-            # Initialize model
-            model = get_model(model_arch_value)
+            # Setup data loaders with seed for reproducibility first to get class_names
+            train_loader, val_loader, test_loader, class_names = self._setup_data_loaders(
+                config.dataset.value, 
+                config.preprocessing_config, 
+                batch_size=config.batch_size,
+                seed=config.random_seed
+            )
+            
+            # Get the number of classes from the class_names
+            num_classes = len(class_names)
+            logger.info(f"Detected {num_classes} classes in the dataset")
+            
+            # Initialize model with correct number of classes
+            model = get_model(model_arch_value, num_classes=num_classes)
             model = model.to(device)
             
             # Record model complexity metrics
@@ -1661,14 +1678,6 @@ class ExperimentManager:
             
             # Get criterion based on model type
             criterion = get_criterion(model_arch_value)
-            
-            # Setup data loaders with seed for reproducibility
-            train_loader, val_loader, test_loader, class_names = self._setup_data_loaders(
-                config.dataset.value, 
-                config.preprocessing_config, 
-                batch_size=config.batch_size,
-                seed=config.random_seed
-            )
             
             # Set up learning rate scheduler if requested
             scheduler = None
@@ -2111,20 +2120,30 @@ class ExperimentManager:
     
     def _run_cross_dataset_experiment(self, config: ExperimentConfig, 
                                     results_manager: ResultsManager) -> Dict[str, Any]:
-        """Run an experiment testing models trained on one dataset against the other."""
+        """Run an experiment with cross-dataset testing."""
         try:
-            # Handle model_architecture correctly when it's a list
-            model_arch = config.model_architecture
-            model_arch_value = model_arch if isinstance(model_arch, list) else model_arch.value
-            
             # Create a summary dictionary to store results
             cross_dataset_summary = {
                 "experiment_id": config.experiment_id,
                 "experiment_name": config.experiment_name,
-                "model_architecture": model_arch_value,
                 "datasets": ["dataset1", "dataset2"],
+                "model_architecture": config.model_architecture,
                 "results": {}
             }
+            
+            # Determine the model architecture value
+            if isinstance(config.model_architecture, list):
+                # For cross-dataset testing, use only the first architecture if it's a list
+                model_arch_value = config.model_architecture[0]
+            elif hasattr(config.model_architecture, 'value'):
+                # Handle the case when it's an enum
+                model_arch_value = config.model_architecture.value
+            else:
+                # Handle when it's already a string
+                model_arch_value = config.model_architecture
+                
+            # Log which architecture we're using for cross-dataset testing
+            logger.info(f"Using {model_arch_value} architecture for cross-dataset testing")
             
             # Run experiments for each dataset
             for dataset in [ExperimentConfig.Dataset.DATASET1, ExperimentConfig.Dataset.DATASET2]:
@@ -2133,15 +2152,14 @@ class ExperimentManager:
                     experiment_id=f"{config.experiment_id}_{dataset.value}",
                     experiment_name=f"{config.experiment_name} - {dataset.value}",
                     dataset=dataset,
-                    model_architecture=config.model_architecture,
+                    model_architecture=model_arch_value,  # Use the extracted model_arch_value
                     preprocessing_config=config.preprocessing_config,
                     epochs=config.epochs,
                     batch_size=config.batch_size,
                     learning_rate=config.learning_rate,
                     cross_dataset_testing=False,
                     results_dir=str(config.results_dir / dataset.value),
-                    random_seed=config.random_seed,  # Pass the random seed for reproducibility
-                    config_version=config.config_version
+                    random_seed=config.random_seed  # Pass the random seed for reproducibility
                 )
                 
                 # Run experiment for this dataset
@@ -2158,23 +2176,37 @@ class ExperimentManager:
                 
                 logger.info(f"Testing model trained on {dataset.value} against {other_dataset.value}...")
                 
+                # First, set up data loaders for the source dataset to get class count
+                source_train_loader, _, _, source_class_names = self._setup_data_loaders(
+                    dataset.value, 
+                    config.preprocessing_config, 
+                    batch_size=config.batch_size,
+                    seed=config.random_seed
+                )
+                
+                # Get the number of classes from the source dataset (the one the model was trained on)
+                num_classes = len(source_class_names)
+                logger.info(f"Model was trained with {num_classes} classes from {dataset.value}")
+                
                 # Get the best model checkpoint
                 model_checkpoint = dataset_config.results_dir / "checkpoints" / "best_model.pth"
                 
-                # Load model
+                # Load model - IMPORTANT: Create with the SAME number of classes as the source dataset
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                model = get_model(model_arch_value)
+                model = get_model(model_arch_value, num_classes=num_classes)
                 model.load_state_dict(torch.load(model_checkpoint, map_location=device))
                 model.to(device)
                 model.eval()
                 
                 # Setup test loader for other dataset with the same random seed
-                _, _, test_loader, class_names = self._setup_data_loaders(
+                _, _, test_loader, target_class_names = self._setup_data_loaders(
                     other_dataset.value, 
                     config.preprocessing_config, 
                     batch_size=config.batch_size,
                     seed=config.random_seed  # Use the same seed for reproducibility
                 )
+                
+                logger.info(f"Testing against {len(target_class_names)} classes from {other_dataset.value}")
                 
                 # Test the model
                 all_labels = []
@@ -2204,12 +2236,43 @@ class ExperimentManager:
                 # Calculate metrics
                 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
                 
-                cross_test_metrics = {
-                    "accuracy": accuracy_score(all_labels, all_preds) * 100,
-                    "precision": precision_score(all_labels, all_preds, average='weighted', zero_division=0),
-                    "recall": recall_score(all_labels, all_preds, average='weighted', zero_division=0),
-                    "f1_score": f1_score(all_labels, all_preds, average='weighted', zero_division=0)
-                }
+                # When calculating metrics, we need to handle the case where the predicted class index
+                # is out of bounds for the target dataset (since model has source dataset's class count)
+                # Only keep predictions within valid range for the target dataset
+                valid_indices = []
+                for i, pred in enumerate(all_preds):
+                    if isinstance(pred, (int, np.integer)) and int(pred) < len(target_class_names):
+                        valid_indices.append(i)
+                
+                if len(valid_indices) < len(all_preds):
+                    logger.warning(f"Filtered out {len(all_preds) - len(valid_indices)} predictions with class indices "
+                                 f"higher than target dataset class count ({len(target_class_names)})")
+                
+                if valid_indices:
+                    filtered_preds = [all_preds[i] for i in valid_indices] 
+                    filtered_labels = [all_labels[i] for i in valid_indices]
+                    
+                    cross_test_metrics = {
+                        "accuracy": accuracy_score(filtered_labels, filtered_preds) * 100,
+                        "precision": precision_score(filtered_labels, filtered_preds, average='weighted', zero_division=0),
+                        "recall": recall_score(filtered_labels, filtered_preds, average='weighted', zero_division=0),
+                        "f1_score": f1_score(filtered_labels, filtered_preds, average='weighted', zero_division=0),
+                        "valid_samples": len(filtered_labels),
+                        "total_samples": len(all_labels),
+                        "filtered_samples": len(all_labels) - len(filtered_labels)
+                    }
+                else:
+                    # If no valid predictions, return zeros
+                    cross_test_metrics = {
+                        "accuracy": 0.0,
+                        "precision": 0.0,
+                        "recall": 0.0,
+                        "f1_score": 0.0,
+                        "valid_samples": 0,
+                        "total_samples": len(all_labels),
+                        "filtered_samples": len(all_labels)
+                    }
+                    logger.warning("No valid predictions for cross-dataset testing!")
                 
                 # Store cross-dataset results
                 cross_dataset_summary["results"][dataset.value]["cross_dataset_testing"] = {
@@ -2376,6 +2439,7 @@ class ExperimentManager:
         from torch.utils.data import DataLoader
         from torchvision import datasets, transforms
         import torch.utils.data
+        from .base_config import PROC_DATA_DIR
         
         # Set generator with specific seed for reproducible data splitting
         g = torch.Generator()
@@ -2391,10 +2455,10 @@ class ExperimentManager:
         
         # If preprocessing config is provided, use the corresponding processed data
         if preprocessing_config:
-            data_dir = Path(f"processed_data/{preprocessing_config.name}/{dataset_name}")
+            data_dir = PROC_DATA_DIR / preprocessing_config.name / dataset_name
         else:
             # Otherwise, use default processed data
-            data_dir = Path(f"processed_data/default/{dataset_name}")
+            data_dir = PROC_DATA_DIR / "default" / dataset_name
         
         # Check if directory exists
         if not data_dir.exists():
@@ -2410,24 +2474,23 @@ class ExperimentManager:
             train_dataset, 
             batch_size=batch_size, 
             shuffle=True, 
-            num_workers=4, 
-            generator=g,
-            worker_init_fn=lambda worker_id: torch.initial_seed() + worker_id
+            num_workers=0,  # Use 0 workers to avoid multiprocessing issues
+            generator=g
         )
         val_loader = DataLoader(
             val_dataset, 
             batch_size=batch_size, 
             shuffle=False, 
-            num_workers=4
+            num_workers=0  # Use 0 workers to avoid multiprocessing issues
         )
         test_loader = DataLoader(
             test_dataset, 
             batch_size=batch_size, 
             shuffle=False, 
-            num_workers=4
+            num_workers=0  # Use 0 workers to avoid multiprocessing issues
         )
         
-        return train_loader, val_loader, test_loader, train_dataset.classes 
+        return train_loader, val_loader, test_loader, train_dataset.classes
 
 
 class DatasetComparisonExperiment:

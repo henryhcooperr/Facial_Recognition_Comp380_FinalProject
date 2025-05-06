@@ -3,15 +3,17 @@
 import argparse
 import sys
 import torch
+import yaml
 from pathlib import Path
 
-from .base_config import logger, CHECKPOINTS_DIR
+from .base_config import logger, CHECKPOINTS_DIR, OUT_DIR
 from .data_prep import get_preprocessing_config, process_raw_data
 from .training import train_model, tune_hyperparameters
 from .testing import evaluate_model, predict_image
 from .face_models import get_model
 from .visualize import plot_tsne_embeddings, plot_attention_maps, plot_embedding_similarity
 from .interactive import interactive_menu
+from .experiment_manager import ExperimentConfig, ExperimentManager
 
 def main():
     """Main entry point for face recognition system.
@@ -59,6 +61,16 @@ def main():
                               help='Type of model to use (not siamese)')
     pred_p.add_argument('--model-name', type=str, help='Name of the model to use')
     pred_p.add_argument('--image-path', type=str, required=True, help='Path to the image to predict')
+    
+    # Experiment command
+    experiment_p = subparsers.add_parser('experiment', help='Run an experiment using a YAML/JSON configuration file')
+    experiment_p.add_argument('--config', type=str, required=True, help='Path to experiment configuration file (.yaml or .json)')
+    
+    # Generate config command
+    gen_config_p = subparsers.add_parser('generate-config', help='Generate a template experiment configuration file')
+    gen_config_p.add_argument('--output', type=str, required=True, help='Path for the output configuration file (.yaml or .json)')
+    gen_config_p.add_argument('--type', type=str, choices=['single', 'comparison', 'cross-dataset'], default='single',
+                             help='Type of experiment configuration to generate')
     
     # Check GPU command
     subparsers.add_parser('check-gpu', help='Check GPU availability')
@@ -142,6 +154,77 @@ def main():
             model_name=args.model_name
         )
         print(f"Prediction: {name} (confidence: {conf:.2f})")
+    
+    elif args.cmd == 'experiment':
+        # Run an experiment using the configuration file
+        config_path = Path(args.config)
+        if not config_path.exists():
+            print(f"Configuration file not found: {config_path}")
+            return 1
+        
+        print(f"Running experiment with configuration from: {config_path}")
+        
+        # Create experiment manager and run the experiment
+        experiment_manager = ExperimentManager()
+        result = experiment_manager.run_experiment(config_path)
+        
+        # Print summary
+        print("\nExperiment completed successfully!")
+        print(f"Results saved to: {result.get('results_dir', 'N/A')}")
+        
+        # Print key metrics if available
+        if "test_metrics" in result and result["test_metrics"]:
+            print("\nTest Metrics:")
+            metrics = result["test_metrics"][0]
+            for key, value in metrics.items():
+                print(f"  {key}: {value}")
+    
+    elif args.cmd == 'generate-config':
+        # Generate a template configuration file
+        output_path = Path(args.output)
+        
+        # Create a template configuration based on the type
+        if args.type == 'single':
+            # Single model experiment
+            config = ExperimentConfig(
+                experiment_name="Single Model Experiment",
+                dataset=ExperimentConfig.Dataset.BOTH,
+                model_architecture=ExperimentConfig.ModelArchitecture.CNN,
+                epochs=30,
+                batch_size=32,
+                learning_rate=0.001,
+                cross_dataset_testing=False
+            )
+        elif args.type == 'comparison':
+            # Architecture comparison experiment
+            config = ExperimentConfig(
+                experiment_name="Architecture Comparison",
+                dataset=ExperimentConfig.Dataset.BOTH,
+                model_architecture=["baseline", "cnn", "attention", "arcface"],
+                epochs=30,
+                batch_size=32,
+                learning_rate=0.001,
+                cross_dataset_testing=False
+            )
+        elif args.type == 'cross-dataset':
+            # Cross-dataset experiment
+            config = ExperimentConfig(
+                experiment_name="Cross-Dataset Experiment",
+                dataset=ExperimentConfig.Dataset.BOTH,
+                model_architecture=ExperimentConfig.ModelArchitecture.CNN,
+                epochs=30,
+                batch_size=32,
+                learning_rate=0.001,
+                cross_dataset_testing=True
+            )
+        
+        # Save the configuration file in the appropriate format
+        if output_path.suffix.lower() in ['.yml', '.yaml']:
+            config.save_yaml(output_path)
+        else:
+            config.save(output_path)
+            
+        print(f"Configuration template saved to: {output_path}")
     
     elif args.cmd == 'check-gpu':
         print("GPU availability:")

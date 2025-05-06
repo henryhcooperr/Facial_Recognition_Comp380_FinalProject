@@ -3,9 +3,13 @@
 import os
 import logging
 from pathlib import Path
+import sys
+import random
+import numpy as np
+import torch
 
 # Project paths - changed to use pathlib after fighting with os.path for hours
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROC_DATA_DIR = DATA_DIR / "processed"  # processed data goes here
@@ -45,9 +49,12 @@ for dir_path in [RAW_DATA_DIR, PROC_DATA_DIR, MODELS_DIR,
 # Added timestamp after getting confused about when errors happened
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 # FIXME: This is a bit clunky but works for now
 # Should eventually replace with a proper CLI confirmation
@@ -96,3 +103,36 @@ def check_gpu():
 #     if accuracy:
 #         return f"{model_type}_{timestamp}_{accuracy:.4f}.pth"
 #     return f"{model_type}_{timestamp}.pth" 
+
+def set_random_seeds(seed: int = 42, deterministic: bool = True):
+    """Set random seeds for reproducibility across Python, NumPy, and PyTorch.
+    
+    Args:
+        seed: Integer seed for random number generators
+        deterministic: If True, makes PyTorch operations deterministic (may impact performance)
+    """
+    # Set Python's random seed
+    random.seed(seed)
+    
+    # Set NumPy's random seed
+    np.random.seed(seed)
+    
+    # Set PyTorch's random seeds
+    torch.manual_seed(seed)
+    
+    # Set CUDA seeds if available
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    
+    # Make PyTorch operations deterministic
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        
+        # Set environment variable for PyTorch to be deterministic
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        
+    logger.info(f"Random seeds have been set to {seed}")
+    
+    return seed 

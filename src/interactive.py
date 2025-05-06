@@ -18,7 +18,6 @@ from .face_models import get_model
 from . import download_dataset
 
 # Get path to the downloader script
-project_dir = Path(__file__).parent.parent.parent
 downloader_script = Path(__file__).parent / "download_dataset.py"
 
 def check_and_download_datasets():

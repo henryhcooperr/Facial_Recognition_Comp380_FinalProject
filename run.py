@@ -31,5 +31,5 @@ from src.main import main
 # Main entry point - kept this simple to maintain compatibility with
 # the module structure I set up. The real work happens in src/main.py
 if __name__ == "__main__":
-    # My professor suggested using sys.exit() for proper error codes
+    # Using sys.exit() for proper error codes
     sys.exit(main()) 

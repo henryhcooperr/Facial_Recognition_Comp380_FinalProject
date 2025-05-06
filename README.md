@@ -92,6 +92,76 @@ python run.py list-models
 python -m unittest discover -s tests
 ```
 
+## Experiment Configuration and Testing
+
+### YAML Configuration
+
+The system now supports YAML-based configuration for experiments, making it easier to reproduce and share experiment settings. You can define all experiment parameters in a YAML file and run the experiment using:
+
+```
+python run.py experiment --config my_experiment.yaml
+```
+
+Example YAML configuration file:
+
+```yaml
+experiment_name: "CNN with Data Augmentation"
+dataset: "both"
+model_architecture: "cnn"
+preprocessing_config:
+  name: "augmented"
+  use_mtcnn: true
+  face_margin: 0.4
+  final_size: [224, 224]
+  augmentation: true
+epochs: 30
+batch_size: 32
+learning_rate: 0.001
+cross_dataset_testing: true
+```
+
+You can also generate a template configuration:
+
+```
+python run.py generate-config --output my_experiment.yaml
+```
+
+### Architecture Comparison
+
+You can compare multiple architectures in a single experiment by specifying them as a list:
+
+```yaml
+experiment_name: "Architecture Comparison"
+dataset: "both"
+model_architecture: ["baseline", "cnn", "attention", "arcface"]
+epochs: 30
+batch_size: 32
+learning_rate: 0.001
+```
+
+### Testing Framework
+
+The system includes comprehensive tests to ensure all components work correctly:
+
+```
+# Run all tests
+python -m unittest discover -s tests
+
+# Run specific tests for the experiment manager
+python tests/run_experiment_tests.py
+
+# Run specific test file
+python -m unittest tests/test_face_recognition_system.py
+```
+
+The test suite covers:
+- YAML configuration management
+- Model registry operations
+- Results management
+- Different experiment types
+- Cross-dataset testing
+- Architecture comparison
+
 ## Project Structure
 
 ```
@@ -111,11 +181,152 @@ python -m unittest discover -s tests
 │   ├── main.py             # Command line interface
 │   ├── testing.py          # Model evaluation
 │   ├── training.py         # Model training
+│   ├── training_utils.py   # Advanced training utilities
+│   ├── experiment_manager.py # Experiment configuration and execution
 │   └── visualize.py        # Visualization functions
 ├── tests/                  # Unit tests
 ├── requirements.txt        # Required packages
 └── run.py                  # Main entry point
 ```
+
+## Training Enhancements
+
+The system now includes advanced training enhancements that improve model performance, training stability, and efficiency:
+
+### Early Stopping
+
+Automatically stops training when performance on validation data stops improving, saving time and preventing overfitting:
+
+```yaml
+# Early stopping configuration in YAML
+use_early_stopping: true
+early_stopping_patience: 10  # Number of epochs to wait for improvement
+early_stopping_min_delta: 0.001  # Minimum change to count as improvement
+early_stopping_metric: "accuracy"  # Metric to monitor
+early_stopping_mode: "max"  # Use "max" for accuracy, "min" for loss
+```
+
+### Gradient Clipping
+
+Helps prevent exploding gradients, stabilizing training for more complex models:
+
+```yaml
+# Gradient clipping configuration in YAML
+use_gradient_clipping: true
+gradient_clipping_max_norm: 1.0  # Maximum gradient norm
+gradient_clipping_adaptive: true  # Automatically adjust based on model type
+```
+
+### Learning Rate Scheduling
+
+Multiple learning rate schedulers to optimize training:
+
+```yaml
+# Learning rate scheduler configuration in YAML
+lr_scheduler_type: "cosine"  # Options: step, exponential, cosine, reduce_on_plateau, one_cycle
+lr_scheduler_params:
+  T_max: 50  # For cosine scheduler
+  eta_min: 0.0001
+```
+
+Available schedulers:
+- **Step**: Reduces learning rate by a factor at specified steps
+- **Exponential**: Decreases learning rate exponentially
+- **Cosine**: Follows cosine curve from initial LR to eta_min
+- **ReduceOnPlateau**: Reduces LR when a metric stops improving
+- **OneCycle**: One-cycle policy as described in Leslie Smith's paper
+
+### Enhanced Model Checkpointing
+
+Improved checkpoint management for better experiment tracking and resumable training:
+
+```yaml
+# Checkpoint configuration in YAML
+save_best_checkpoint: true  # Save best model as checkpoint
+checkpoint_frequency: 5  # Save every N epochs
+keep_last_n_checkpoints: 3  # Only keep the last N checkpoints
+keep_best_n_checkpoints: 1  # Keep best N checkpoints
+save_checkpoint_metadata: true  # Include metadata in checkpoints
+resumable_training: true  # Enable resuming from checkpoints
+```
+
+### Visualization Improvements
+
+Added learning rate schedule visualization:
+
+```python
+from src.training_utils import plot_lr_schedule
+plot_lr_schedule(scheduler, optimizer, num_epochs=50, save_path='lr_schedule.png')
+```
+
+### Using Training Enhancements
+
+To use these enhancements in an experiment, add the appropriate parameters to your YAML configuration:
+
+```yaml
+experiment_name: "Enhanced CNN Training"
+dataset: "dataset1"
+model_architecture: "cnn"
+epochs: 50
+batch_size: 32
+learning_rate: 0.001
+random_seed: 42
+
+# Early stopping
+use_early_stopping: true
+early_stopping_patience: 7
+early_stopping_metric: "accuracy"
+early_stopping_mode: "max"
+
+# Gradient clipping
+use_gradient_clipping: true
+gradient_clipping_max_norm: 1.0
+
+# Learning rate scheduling
+lr_scheduler_type: "cosine"
+lr_scheduler_params:
+  T_max: 50
+  eta_min: 0.00001
+
+# Checkpointing
+save_best_checkpoint: true
+checkpoint_frequency: 1
+keep_last_n_checkpoints: 5
+```
+
+### Testing Training Enhancements
+
+Run the training enhancement tests to verify everything is working correctly:
+
+```
+python tests/run_training_tests.py
+```
+
+## Enhanced Evaluation Metrics
+
+The framework provides comprehensive evaluation capabilities to understand model performance in depth:
+
+1. **Per-class performance analysis**:
+   - Detailed metrics (precision, recall, F1, ROC-AUC) for each class
+   - Enhanced confusion matrices with per-class statistics
+   - Class difficulty ranking to identify problematic classes
+   - Visualizations highlighting performance differences between classes
+
+2. **Confidence calibration metrics**:
+   - Expected Calibration Error (ECE) to measure prediction reliability
+   - Reliability diagrams showing confidence vs. accuracy
+   - Confidence histograms for correct vs. incorrect predictions
+   - Temperature scaling for calibrating model outputs
+
+3. **Time and resource utilization metrics**:
+   - Comprehensive timing for training, epochs, and inference
+   - Memory usage tracking during model execution
+   - Model complexity analysis (parameters, FLOPs)
+   - Comparison of efficiency across architectures
+
+These detailed metrics help identify model weaknesses, improve reliability, and optimize resource usage in production deployments.
+
+## Project Structure
 
 ## Development Journey
 

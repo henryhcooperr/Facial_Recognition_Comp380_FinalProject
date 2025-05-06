@@ -27,6 +27,8 @@ from .data_prep import PreprocessingConfig, process_raw_data
 from .face_models import get_model, get_criterion
 from .testing import evaluate_model, plot_confusion_matrix, plot_roc_curves, plot_gradcam_visualization
 from .visualize import plot_tsne_embeddings, plot_attention_maps, plot_embedding_similarity, plot_learning_curves
+from .training_utils import save_checkpoint, prune_checkpoints, EarlyStopping, get_scheduler, apply_gradient_clipping, plot_lr_schedule
+from .advanced_metrics import create_enhanced_confusion_matrix, plot_advanced_confusion_matrix, calculate_per_class_metrics, plot_class_difficulty_analysis, expected_calibration_error, plot_reliability_diagram, plot_confidence_histogram, plot_resource_usage
 
 
 class ExperimentConfig:
@@ -45,53 +47,284 @@ class ExperimentConfig:
         ARCFACE = "arcface"
         HYBRID = "hybrid"
     
-    def __init__(self,
-                 experiment_id: str = None,
-                 experiment_name: str = "Unnamed Experiment",
-                 dataset: Union[Dataset, str] = Dataset.BOTH,
-                 model_architecture: Union[ModelArchitecture, str] = ModelArchitecture.CNN,
-                 preprocessing_config: PreprocessingConfig = None,
-                 epochs: int = 30,
-                 batch_size: int = 32,
-                 learning_rate: float = 0.001,
-                 cross_dataset_testing: bool = True,
-                 results_dir: str = None):
-        """Initialize experiment configuration."""
-        # Generate UUID if not provided
-        self.experiment_id = experiment_id or str(uuid.uuid4())[:8]
-        self.experiment_name = experiment_name
+    class LRSchedulerType(Enum):
+        """Types of learning rate schedulers."""
+        NONE = "none"
+        STEP = "step"
+        EXPONENTIAL = "exponential"
+        COSINE = "cosine"
+        REDUCE_ON_PLATEAU = "reduce_on_plateau"
+        ONE_CYCLE = "one_cycle"
+    
+    class EvaluationMode(Enum):
+        """Evaluation modes for model evaluation."""
+        STANDARD = "standard"  # Standard accuracy, precision, recall, F1
+        ENHANCED = "enhanced"  # Standard + per-class metrics, calibration, resource usage
         
-        # Convert string to enum if needed
+    def __init__(
+        self,
+        experiment_name: str = "Unnamed Experiment",
+        dataset: Union[Dataset, str] = Dataset.BOTH,
+        model_architecture: Union[ModelArchitecture, str, List[str]] = ModelArchitecture.CNN,
+        preprocessing_config: Optional[PreprocessingConfig] = None,
+        epochs: int = 30,
+        batch_size: int = 32,
+        learning_rate: float = 0.001,
+        cross_dataset_testing: bool = True,
+        results_dir: Optional[str] = None,
+        experiment_id: Optional[str] = None,
+        config_version: str = "1.0.0",
+        config_history: Optional[List[Dict[str, Any]]] = None,
+        
+        # Training enhancements
+        random_seed: int = 42,
+        use_early_stopping: bool = False,
+        early_stopping_patience: int = 10,
+        early_stopping_min_delta: float = 0.0,
+        early_stopping_metric: str = "loss",
+        early_stopping_mode: str = "min",
+        use_gradient_clipping: bool = False,
+        gradient_clipping_max_norm: float = 1.0,
+        gradient_clipping_adaptive: bool = False,
+        lr_scheduler_type: Union[LRSchedulerType, str] = LRSchedulerType.NONE,
+        lr_scheduler_params: Optional[Dict[str, Any]] = None,
+        
+        # Enhanced model checkpointing parameters (pre-existing)
+        save_best_checkpoint: bool = True,
+        checkpoint_frequency: int = 1,
+        keep_last_n_checkpoints: int = 5,
+        keep_best_n_checkpoints: int = 3,
+        save_checkpoint_metadata: bool = True,
+        resumable_training: bool = True,
+        
+        # Enhanced evaluation metrics (new)
+        evaluation_mode: Union[EvaluationMode, str] = EvaluationMode.STANDARD,
+        per_class_analysis: bool = True,
+        calibration_analysis: bool = True,
+        resource_monitoring: bool = True,
+        calibration_n_bins: int = 10,
+        use_temperature_scaling: bool = False,
+        confidence_threshold: float = 0.5,
+        save_raw_predictions: bool = True,
+        max_misclassified_examples: int = 10,
+        model_complexity_analysis: bool = True,
+        class_difficulty_metric: str = "f1"
+    ):
+        """Initialize experiment configuration.
+        
+        Args:
+            experiment_name: Human-readable name for the experiment
+            dataset: Which dataset to use for training/testing
+            model_architecture: Model architecture to use 
+            preprocessing_config: Config for preprocessing steps
+            epochs: Number of training epochs
+            batch_size: Training batch size
+            learning_rate: Initial learning rate
+            cross_dataset_testing: Whether to test on other datasets
+            results_dir: Directory to save results (auto-generated if None)
+            experiment_id: Unique ID for experiment (auto-generated if None)
+            config_version: Version of this configuration
+            config_history: List of previous configurations
+            
+            # Training enhancements
+            random_seed: Random seed for reproducibility
+            use_early_stopping: Whether to use early stopping
+            early_stopping_patience: Patience for early stopping
+            early_stopping_min_delta: Minimum change to count as improvement
+            early_stopping_mode: 'min' for loss, 'max' for accuracy
+            early_stopping_metric: 'loss' or 'accuracy'
+            use_gradient_clipping: Whether to use gradient clipping
+            gradient_clipping_max_norm: Maximum gradient norm
+            gradient_clipping_adaptive: Whether to use adaptive clipping
+            lr_scheduler_type: Type of learning rate scheduler to use
+            lr_scheduler_params: Parameters for the scheduler
+            
+            # Checkpointing
+            save_best_checkpoint: Whether to save the best model checkpoint
+            checkpoint_frequency: How often to save checkpoints (in epochs)
+            keep_last_n_checkpoints: Number of recent checkpoints to keep
+            keep_best_n_checkpoints: Number of best checkpoints to keep
+            save_checkpoint_metadata: Whether to save metadata with checkpoints
+            resumable_training: Whether to allow resuming from checkpoints
+            
+            # Enhanced evaluation metrics
+            evaluation_mode: Mode for model evaluation
+            per_class_analysis: Whether to perform per-class analysis
+            calibration_analysis: Whether to analyze prediction calibration
+            resource_monitoring: Whether to monitor resource usage
+            calibration_n_bins: Number of bins for calibration metrics
+            use_temperature_scaling: Whether to use temperature scaling
+            confidence_threshold: Threshold for binary predictions
+            save_raw_predictions: Whether to save raw predictions
+            max_misclassified_examples: Max number of examples to store
+            model_complexity_analysis: Whether to analyze model complexity
+            class_difficulty_metric: Metric to use for class difficulty ranking
+        """
+        # Set basic configuration parameters
+        self.experiment_name = experiment_name
+        self.experiment_id = experiment_id or str(uuid.uuid4())[:8]
+        
+        # Creation timestamp
+        self.created_at = datetime.datetime.now().isoformat()
+        
+        # Handle dataset parameter
         if isinstance(dataset, str):
-            self.dataset = self.Dataset(dataset)
+            try:
+                self.dataset = ExperimentConfig.Dataset(dataset)
+            except ValueError:
+                raise ValueError(f"Invalid dataset: {dataset}")
         else:
             self.dataset = dataset
-            
-        if isinstance(model_architecture, str):
-            self.model_architecture = self.ModelArchitecture(model_architecture)
+        
+        # Handle model_architecture parameter (could be enum, string, or list)
+        if isinstance(model_architecture, list):
+            # For comparison experiments with multiple architectures
+            self.model_architecture = model_architecture
+        elif isinstance(model_architecture, str):
+            try:
+                self.model_architecture = ExperimentConfig.ModelArchitecture(model_architecture)
+            except ValueError:
+                raise ValueError(f"Invalid model architecture: {model_architecture}")
         else:
             self.model_architecture = model_architecture
         
-        # Set preprocessing configuration
+        # Set training parameters
         self.preprocessing_config = preprocessing_config
-        
-        # Training parameters
         self.epochs = epochs
         self.batch_size = batch_size
         self.learning_rate = learning_rate
-        
-        # Testing configuration
         self.cross_dataset_testing = cross_dataset_testing
         
-        # Results directory
+        # Set up results directory
         if results_dir:
             self.results_dir = Path(results_dir)
         else:
+            # Auto-generate results directory name
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self.results_dir = OUT_DIR / f"experiment_{self.experiment_id}_{timestamp}"
-
-        # Creation timestamp
-        self.created_at = datetime.datetime.now().isoformat()
+        
+        # Configuration versioning
+        self.config_version = config_version
+        self.config_history = config_history or []
+        
+        # Training enhancements
+        self.random_seed = random_seed
+        self.use_early_stopping = use_early_stopping
+        self.early_stopping_patience = early_stopping_patience
+        self.early_stopping_min_delta = early_stopping_min_delta
+        self.early_stopping_metric = early_stopping_metric
+        self.early_stopping_mode = early_stopping_mode
+        self.use_gradient_clipping = use_gradient_clipping
+        self.gradient_clipping_max_norm = gradient_clipping_max_norm
+        self.gradient_clipping_adaptive = gradient_clipping_adaptive
+        
+        # Handle LR scheduler type
+        if isinstance(lr_scheduler_type, str):
+            try:
+                self.lr_scheduler_type = ExperimentConfig.LRSchedulerType(lr_scheduler_type)
+            except ValueError:
+                logger.warning(f"Invalid scheduler type: {lr_scheduler_type}. Using NONE.")
+                self.lr_scheduler_type = ExperimentConfig.LRSchedulerType.NONE
+        else:
+            self.lr_scheduler_type = lr_scheduler_type
+        
+        self.lr_scheduler_params = lr_scheduler_params or {}
+        
+        # Enhanced model checkpointing parameters
+        self.save_best_checkpoint = save_best_checkpoint
+        self.checkpoint_frequency = checkpoint_frequency
+        self.keep_last_n_checkpoints = keep_last_n_checkpoints
+        self.keep_best_n_checkpoints = keep_best_n_checkpoints
+        self.save_checkpoint_metadata = save_checkpoint_metadata
+        self.resumable_training = resumable_training
+        
+        # Enhanced evaluation metrics
+        if isinstance(evaluation_mode, str):
+            try:
+                self.evaluation_mode = ExperimentConfig.EvaluationMode(evaluation_mode)
+            except ValueError:
+                raise ValueError(f"Invalid evaluation mode: {evaluation_mode}")
+        else:
+            self.evaluation_mode = evaluation_mode
+            
+        self.per_class_analysis = per_class_analysis
+        self.calibration_analysis = calibration_analysis
+        self.resource_monitoring = resource_monitoring
+        self.calibration_n_bins = calibration_n_bins
+        self.use_temperature_scaling = use_temperature_scaling
+        self.confidence_threshold = confidence_threshold
+        self.save_raw_predictions = save_raw_predictions
+        self.max_misclassified_examples = max_misclassified_examples
+        self.model_complexity_analysis = model_complexity_analysis
+        self.class_difficulty_metric = class_difficulty_metric
+    
+    def increment_version(self, level='patch'):
+        """Increment the configuration version.
+        
+        Args:
+            level: Which part of the version to increment ('major', 'minor', or 'patch')
+        """
+        # Add current version to history before incrementing
+        self.add_to_history()
+        
+        # Parse current version
+        major, minor, patch = map(int, self.config_version.split('.'))
+        
+        # Increment appropriate part
+        if level == 'major':
+            major += 1
+            minor = 0
+            patch = 0
+        elif level == 'minor':
+            minor += 1
+            patch = 0
+        else:  # patch
+            patch += 1
+            
+        # Update version
+        self.config_version = f"{major}.{minor}.{patch}"
+        return self.config_version
+    
+    def add_to_history(self):
+        """Add current configuration state to history."""
+        # Create a copy of current config state
+        current_state = self.to_dict()
+        current_state.pop('config_history', None)  # Remove history to avoid nesting
+        
+        # Add to history with timestamp
+        history_entry = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'config': current_state
+        }
+        self.config_history.append(history_entry)
+    
+    def compare_with(self, other: 'ExperimentConfig') -> Dict[str, Dict[str, Any]]:
+        """Compare this config with another and return differences."""
+        this_dict = self.to_dict()
+        other_dict = other.to_dict()
+        
+        # Remove history and timestamps to focus on functional differences
+        for d in [this_dict, other_dict]:
+            d.pop('config_history', None)
+            d.pop('created_at', None)
+        
+        # Find differences
+        differences = {}
+        all_keys = set(this_dict.keys()) | set(other_dict.keys())
+        
+        for key in all_keys:
+            if key not in this_dict:
+                differences[key] = {'status': 'added', 'value': other_dict[key]}
+            elif key not in other_dict:
+                differences[key] = {'status': 'removed', 'value': this_dict[key]}
+            elif this_dict[key] != other_dict[key]:
+                differences[key] = {
+                    'status': 'modified',
+                    'old_value': this_dict[key],
+                    'new_value': other_dict[key]
+                }
+        
+        return differences
 
     def to_dict(self) -> Dict:
         """Convert config to dictionary for saving."""
@@ -99,13 +332,32 @@ class ExperimentConfig:
             "experiment_id": self.experiment_id,
             "experiment_name": self.experiment_name,
             "dataset": self.dataset.value,
-            "model_architecture": self.model_architecture.value,
+            "model_architecture": self.model_architecture.value if not isinstance(self.model_architecture, list) else self.model_architecture,
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
             "cross_dataset_testing": self.cross_dataset_testing,
             "results_dir": str(self.results_dir),
-            "created_at": self.created_at
+            "created_at": self.created_at,
+            "random_seed": self.random_seed,
+            "config_version": self.config_version,
+            "config_history": self.config_history,
+            "use_early_stopping": self.use_early_stopping,
+            "early_stopping_patience": self.early_stopping_patience,
+            "early_stopping_min_delta": self.early_stopping_min_delta,
+            "early_stopping_metric": self.early_stopping_metric,
+            "early_stopping_mode": self.early_stopping_mode,
+            "use_gradient_clipping": self.use_gradient_clipping,
+            "gradient_clipping_max_norm": self.gradient_clipping_max_norm,
+            "gradient_clipping_adaptive": self.gradient_clipping_adaptive,
+            "lr_scheduler_type": self.lr_scheduler_type.value if isinstance(self.lr_scheduler_type, Enum) else self.lr_scheduler_type,
+            "lr_scheduler_params": self.lr_scheduler_params,
+            "save_best_checkpoint": self.save_best_checkpoint,
+            "checkpoint_frequency": self.checkpoint_frequency,
+            "keep_last_n_checkpoints": self.keep_last_n_checkpoints,
+            "keep_best_n_checkpoints": self.keep_best_n_checkpoints,
+            "save_checkpoint_metadata": self.save_checkpoint_metadata,
+            "resumable_training": self.resumable_training
         }
         
         # Add preprocessing config if available
@@ -133,14 +385,46 @@ class ExperimentConfig:
             batch_size=config_dict.get("batch_size", 32),
             learning_rate=config_dict.get("learning_rate", 0.001),
             cross_dataset_testing=config_dict.get("cross_dataset_testing", True),
-            results_dir=config_dict.get("results_dir")
+            results_dir=config_dict.get("results_dir"),
+            random_seed=config_dict.get("random_seed", 42),
+            config_version=config_dict.get("config_version", "1.0.0"),
+            use_early_stopping=config_dict.get("use_early_stopping", False),
+            early_stopping_patience=config_dict.get("early_stopping_patience", 10),
+            early_stopping_min_delta=config_dict.get("early_stopping_min_delta", 0.0),
+            early_stopping_metric=config_dict.get("early_stopping_metric", "loss"),
+            early_stopping_mode=config_dict.get("early_stopping_mode", "min"),
+            use_gradient_clipping=config_dict.get("use_gradient_clipping", False),
+            gradient_clipping_max_norm=config_dict.get("gradient_clipping_max_norm", 1.0),
+            gradient_clipping_adaptive=config_dict.get("gradient_clipping_adaptive", False),
+            lr_scheduler_type=config_dict.get("lr_scheduler_type", "none"),
+            lr_scheduler_params=config_dict.get("lr_scheduler_params", {}),
+            save_best_checkpoint=config_dict.get("save_best_checkpoint", True),
+            checkpoint_frequency=config_dict.get("checkpoint_frequency", 1),
+            keep_last_n_checkpoints=config_dict.get("keep_last_n_checkpoints", 5),
+            keep_best_n_checkpoints=config_dict.get("keep_best_n_checkpoints", 3),
+            save_checkpoint_metadata=config_dict.get("save_checkpoint_metadata", True),
+            resumable_training=config_dict.get("resumable_training", True)
         )
         
         # Set creation timestamp if available
         if "created_at" in config_dict:
             config.created_at = config_dict["created_at"]
             
+        # Set config history if available
+        if "config_history" in config_dict:
+            config.config_history = config_dict["config_history"]
+            
         return config
+    
+    def to_yaml(self) -> str:
+        """Convert config to YAML string."""
+        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+    
+    @classmethod
+    def from_yaml(cls, yaml_str: str) -> 'ExperimentConfig':
+        """Create config from YAML string."""
+        config_dict = yaml.safe_load(yaml_str)
+        return cls.from_dict(config_dict)
     
     def save(self, filepath: Optional[Path] = None) -> Path:
         """Save config to JSON file."""
@@ -155,6 +439,19 @@ class ExperimentConfig:
             
         return filepath
     
+    def save_yaml(self, filepath: Optional[Path] = None) -> Path:
+        """Save config to YAML file."""
+        if filepath is None:
+            filepath = self.results_dir / "experiment_config.yaml"
+            
+        # Create directory if it doesn't exist
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(filepath, 'w') as f:
+            f.write(self.to_yaml())
+            
+        return filepath
+    
     @classmethod
     def load(cls, filepath: Path) -> 'ExperimentConfig':
         """Load config from JSON file."""
@@ -162,6 +459,14 @@ class ExperimentConfig:
             config_dict = json.load(f)
             
         return cls.from_dict(config_dict)
+    
+    @classmethod
+    def load_yaml(cls, filepath: Path) -> 'ExperimentConfig':
+        """Load config from YAML file."""
+        with open(filepath, 'r') as f:
+            yaml_str = f.read()
+            
+        return cls.from_yaml(yaml_str)
 
 
 class ModelRegistry:
@@ -281,14 +586,21 @@ class ResultsManager:
         self.eval_metrics = []
         self.test_metrics = []
         self.confusion_matrices = {}
+        self.per_class_metrics = {}
+        self.calibration_metrics = {}
+        self.resource_metrics = {}
         self.experiment_log = []
+        
+        # Handle model_architecture correctly when it's a list
+        model_arch = self.config.model_architecture
+        model_arch_value = model_arch if isinstance(model_arch, list) else model_arch.value
         
         # Add experiment start entry
         self.log_event("experiment_started", {
             "experiment_id": self.config.experiment_id,
             "experiment_name": self.config.experiment_name,
             "dataset": self.config.dataset.value,
-            "model_architecture": self.config.model_architecture.value,
+            "model_architecture": model_arch_value,
             "timestamp": datetime.datetime.now().isoformat()
         })
     
@@ -304,11 +616,28 @@ class ResultsManager:
         self.plots_dir = self.results_dir / "plots"
         self.plots_dir.mkdir(exist_ok=True)
         
+        # Create subdirectories for each type of visualization
+        self.confusion_dir = self.plots_dir / "confusion_matrices"
+        self.confusion_dir.mkdir(exist_ok=True)
+        
+        self.calibration_dir = self.plots_dir / "calibration"
+        self.calibration_dir.mkdir(exist_ok=True)
+        
+        self.class_analysis_dir = self.plots_dir / "class_analysis"
+        self.class_analysis_dir.mkdir(exist_ok=True)
+        
+        self.resource_dir = self.plots_dir / "resources"
+        self.resource_dir.mkdir(exist_ok=True)
+        
         self.checkpoints_dir = self.results_dir / "checkpoints"
         self.checkpoints_dir.mkdir(exist_ok=True)
         
         self.logs_dir = self.results_dir / "logs"
         self.logs_dir.mkdir(exist_ok=True)
+        
+        # New directory for raw predictions (for post-hoc analysis)
+        self.predictions_dir = self.results_dir / "predictions"
+        self.predictions_dir.mkdir(exist_ok=True)
     
     def record_training_metrics(self, epoch: int, metrics: Dict[str, float]):
         """Record per-epoch training metrics."""
@@ -355,45 +684,261 @@ class ResultsManager:
     
     def record_confusion_matrix(self, y_true: List[int], y_pred: List[int], 
                               class_names: List[str], dataset: str = "test"):
-        """Record confusion matrix."""
-        cm = confusion_matrix(y_true, y_pred)
+        """Record basic confusion matrix (backward compatibility)."""
+        from .advanced_metrics import create_enhanced_confusion_matrix, plot_advanced_confusion_matrix
+        
+        # Use enhanced confusion matrix functionality
+        enhanced_cm = create_enhanced_confusion_matrix(y_true, y_pred, class_names)
         
         # Store confusion matrix
-        self.confusion_matrices[dataset] = {
-            "matrix": cm.tolist(),
-            "class_names": class_names
-        }
+        self.confusion_matrices[dataset] = enhanced_cm
         
         # Save to JSON
         cm_path = self.metrics_dir / f"confusion_matrix_{dataset}.json"
         with open(cm_path, 'w') as f:
-            json.dump(self.confusion_matrices[dataset], f, indent=2)
+            json.dump(enhanced_cm, f, indent=2)
         
-        # Create visualization
-        plt.figure(figsize=(10, 8))
-        plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-        plt.title(f'Confusion Matrix - {dataset}')
-        plt.colorbar()
+        # Create enhanced visualization
+        plot_advanced_confusion_matrix(
+            enhanced_cm, 
+            output_path=self.confusion_dir / f"confusion_matrix_{dataset}.png"
+        )
+    
+    def record_per_class_metrics(self, y_true: List[int], y_pred: List[int], 
+                                y_score: np.ndarray, class_names: List[str], 
+                                dataset: str = "test"):
+        """
+        Record detailed per-class performance metrics.
         
-        tick_marks = np.arange(len(class_names))
-        plt.xticks(tick_marks, class_names, rotation=45)
-        plt.yticks(tick_marks, class_names)
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            y_score: Prediction confidence scores
+            class_names: Names of the classes
+            dataset: Dataset name (e.g., "test", "validation")
+        """
+        from .advanced_metrics import (
+            calculate_per_class_metrics, 
+            plot_class_difficulty_analysis
+        )
         
-        fmt = 'd'
-        thresh = cm.max() / 2.
-        for i in range(cm.shape[0]):
-            for j in range(cm.shape[1]):
-                plt.text(j, i, format(cm[i, j], fmt),
-                        horizontalalignment="center",
-                        color="white" if cm[i, j] > thresh else "black")
+        # Calculate per-class metrics
+        per_class_metrics = calculate_per_class_metrics(
+            np.array(y_true), np.array(y_pred), y_score, class_names
+        )
         
-        plt.ylabel('True label')
-        plt.xlabel('Predicted label')
-        plt.tight_layout()
+        # Store per-class metrics
+        self.per_class_metrics[dataset] = per_class_metrics
         
-        # Save plot
-        plt.savefig(self.plots_dir / f"confusion_matrix_{dataset}.png")
-        plt.close()
+        # Save to JSON
+        metrics_path = self.metrics_dir / f"per_class_metrics_{dataset}.json"
+        with open(metrics_path, 'w') as f:
+            json.dump(per_class_metrics, f, indent=2)
+        
+        # Create class difficulty visualization
+        plot_class_difficulty_analysis(
+            per_class_metrics, 
+            output_path=self.class_analysis_dir / f"class_difficulty_{dataset}.png",
+            metric="f1"  # Use F1 score for difficulty ranking
+        )
+        
+        # Also create visualizations by precision and recall
+        plot_class_difficulty_analysis(
+            per_class_metrics, 
+            output_path=self.class_analysis_dir / f"class_difficulty_precision_{dataset}.png",
+            metric="precision"
+        )
+        
+        plot_class_difficulty_analysis(
+            per_class_metrics, 
+            output_path=self.class_analysis_dir / f"class_difficulty_recall_{dataset}.png",
+            metric="recall"
+        )
+        
+        # Log event
+        self.log_event("per_class_metrics_recorded", {
+            "dataset": dataset,
+            "num_classes": len(class_names)
+        })
+    
+    def record_calibration_metrics(self, y_true: List[int], y_pred: List[int], 
+                                  y_score: np.ndarray, dataset: str = "test"):
+        """
+        Record confidence calibration metrics.
+        
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            y_score: Prediction confidence scores
+            dataset: Dataset name (e.g., "test", "validation")
+        """
+        from .advanced_metrics import (
+            expected_calibration_error, 
+            plot_reliability_diagram,
+            plot_confidence_histogram
+        )
+        
+        # Calculate calibration metrics
+        calibration_data = expected_calibration_error(
+            np.array(y_true), np.array(y_pred), y_score
+        )
+        
+        # Store calibration metrics
+        self.calibration_metrics[dataset] = calibration_data
+        
+        # Save to JSON
+        metrics_path = self.metrics_dir / f"calibration_metrics_{dataset}.json"
+        with open(metrics_path, 'w') as f:
+            json.dump(calibration_data, f, indent=2)
+        
+        # Create reliability diagram
+        plot_reliability_diagram(
+            calibration_data,
+            output_path=self.calibration_dir / f"reliability_diagram_{dataset}.png"
+        )
+        
+        # Create confidence histogram
+        plot_confidence_histogram(
+            np.array(y_true), np.array(y_pred), y_score,
+            output_path=self.calibration_dir / f"confidence_histogram_{dataset}.png"
+        )
+        
+        # Log event
+        self.log_event("calibration_metrics_recorded", {
+            "dataset": dataset,
+            "ece": calibration_data["expected_calibration_error"]
+        })
+    
+    def record_resource_metrics(self, resource_data: Dict[str, Any], phase: str):
+        """
+        Record resource utilization metrics.
+        
+        Args:
+            resource_data: Dictionary with resource usage data
+            phase: Phase of the experiment (e.g., "training", "inference")
+        """
+        from .advanced_metrics import plot_resource_usage
+        
+        # Store resource metrics
+        self.resource_metrics[phase] = resource_data
+        
+        # Save to JSON
+        metrics_path = self.metrics_dir / f"resource_metrics_{phase}.json"
+        with open(metrics_path, 'w') as f:
+            json.dump(resource_data, f, indent=2)
+        
+        # Create resource usage plot
+        plot_resource_usage(
+            resource_data,
+            output_path=self.resource_dir / f"resource_usage_{phase}.png"
+        )
+        
+        # Log event
+        self.log_event("resource_metrics_recorded", {
+            "phase": phase,
+            "duration": resource_data["duration"],
+            "avg_cpu": resource_data["cpu_percent"]["mean"],
+            "avg_memory_mb": resource_data["memory_mb"]["mean"]
+        })
+    
+    def record_model_complexity(self, model: torch.nn.Module, input_size: Tuple[int, ...]):
+        """
+        Record model complexity metrics (parameters, FLOPs).
+        
+        Args:
+            model: PyTorch model
+            input_size: Input size for the model (batch_size, channels, height, width)
+        """
+        from .advanced_metrics import count_model_parameters, estimate_model_flops
+        
+        # Count parameters
+        param_counts = count_model_parameters(model)
+        
+        # Estimate FLOPs
+        try:
+            flop_estimates = estimate_model_flops(model, input_size)
+        except Exception as e:
+            logger.warning(f"Could not estimate FLOPs: {str(e)}")
+            flop_estimates = {"error": str(e)}
+        
+        # Combine metrics
+        complexity_metrics = {
+            "parameters": param_counts,
+            "flops_estimate": flop_estimates,
+            "input_size": input_size
+        }
+        
+        # Store complexity metrics
+        self.resource_metrics["model_complexity"] = complexity_metrics
+        
+        # Save to JSON
+        metrics_path = self.metrics_dir / "model_complexity.json"
+        with open(metrics_path, 'w') as f:
+            json.dump(complexity_metrics, f, indent=2)
+        
+        # Log event
+        self.log_event("model_complexity_recorded", {
+            "total_parameters": param_counts["total_parameters"],
+            "trainable_parameters": param_counts["trainable_parameters"]
+        })
+    
+    def save_raw_predictions(self, y_true: List[int], y_pred: List[int], 
+                           y_score: np.ndarray, class_names: List[str], 
+                           filenames: Optional[List[str]] = None, 
+                           dataset: str = "test"):
+        """
+        Save raw predictions for post-hoc analysis.
+        
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            y_score: Prediction confidence scores
+            class_names: Names of the classes
+            filenames: Optional list of filenames corresponding to the samples
+            dataset: Dataset name (e.g., "test", "validation")
+        """
+        # Convert predictions to a DataFrame
+        import pandas as pd
+        
+        # Create basic dataframe
+        data = {
+            "true_label_idx": y_true,
+            "true_label": [class_names[i] for i in y_true],
+            "pred_label_idx": y_pred,
+            "pred_label": [class_names[i] for i in y_pred],
+            "correct": np.array(y_true) == np.array(y_pred)
+        }
+        
+        # Add confidence scores
+        if y_score.ndim > 1:
+            # For multi-class, get confidence for predicted class and all classes
+            data["confidence"] = np.array([y_score[i, pred] for i, pred in enumerate(y_pred)])
+            
+            # Add confidence for each class
+            for i, class_name in enumerate(class_names):
+                if i < y_score.shape[1]:
+                    data[f"conf_{class_name}"] = y_score[:, i]
+        else:
+            # For binary classification
+            data["confidence"] = y_score
+        
+        # Add filenames if provided
+        if filenames:
+            data["filename"] = filenames
+        
+        # Create DataFrame
+        df = pd.DataFrame(data)
+        
+        # Save to CSV
+        predictions_path = self.predictions_dir / f"predictions_{dataset}.csv"
+        df.to_csv(predictions_path, index=False)
+        
+        # Log event
+        self.log_event("raw_predictions_saved", {
+            "dataset": dataset,
+            "num_samples": len(y_true),
+            "accuracy": float(np.mean(np.array(y_true) == np.array(y_pred)))
+        })
     
     def record_learning_curves(self, train_losses: List[float], val_losses: List[float], 
                              accuracies: List[float]):
@@ -442,25 +987,86 @@ class ResultsManager:
         df.to_csv(csv_path, index=False)
     
     def save_model_checkpoint(self, model: nn.Module, optimizer: torch.optim.Optimizer, 
-                            epoch: int, is_best: bool = False) -> Path:
-        """Save model checkpoint."""
-        checkpoint_path = self.checkpoints_dir / f"checkpoint_epoch_{epoch}.pth"
+                            epoch: int, is_best: bool = False, 
+                            scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+                            metrics: Optional[Dict[str, float]] = None) -> Path:
+        """Save model checkpoint with enhanced functionality.
+        
+        Args:
+            model: PyTorch model
+            optimizer: PyTorch optimizer
+            epoch: Current epoch number
+            is_best: Whether this is the best model so far
+            scheduler: Learning rate scheduler (optional)
+            metrics: Dictionary of validation metrics
+            
+        Returns:
+            Path to saved checkpoint
+        """
+        # Create checkpoint filename
+        checkpoint_filename = f"checkpoint_epoch_{epoch}.pth"
         best_model_path = self.checkpoints_dir / "best_model.pth"
         
-        # Save checkpoint
-        checkpoint = {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "experiment_id": self.config.experiment_id
+        # Use metrics if provided or create minimal dict
+        validation_metrics = metrics or {"is_best": is_best}
+        
+        # Create metadata
+        metadata = {
+            "experiment_id": self.config.experiment_id,
+            "experiment_name": self.config.experiment_name,
+            "model_architecture": self.config.model_architecture.value if hasattr(self.config.model_architecture, 'value') else self.config.model_architecture,
+            "dataset": self.config.dataset.value,
+            "preprocessing": self.config.preprocessing_config.name if self.config.preprocessing_config else "None",
+            "config_version": self.config.config_version,
+            "timestamp": datetime.datetime.now().isoformat()
         }
         
-        torch.save(checkpoint, checkpoint_path)
+        # Save checkpoint
+        checkpoint_path = save_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch,
+            validation_metrics=validation_metrics,
+            checkpoint_dir=self.checkpoints_dir,
+            filename=checkpoint_filename,
+            metadata=metadata if self.config.save_checkpoint_metadata else None,
+            keep_best_only=False  # We'll handle pruning separately
+        )
         
         # Save best model if needed
         if is_best:
+            # Save model state dict
             torch.save(model.state_dict(), best_model_path)
+            
+            # If full checkpoint for best model is requested
+            if self.config.save_best_checkpoint:
+                best_checkpoint_path = self.checkpoints_dir / "best_checkpoint.pth"
+                # Save full checkpoint including optimizer, scheduler etc.
+                save_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                    validation_metrics=validation_metrics,
+                    checkpoint_dir=self.checkpoints_dir,
+                    filename="best_checkpoint.pth",
+                    metadata=metadata if self.config.save_checkpoint_metadata else None,
+                    keep_best_only=False
+                )
+            
+            # Log event
             self.log_event("best_model_saved", {"epoch": epoch})
+        
+        # Prune old checkpoints based on config
+        if epoch % self.config.checkpoint_frequency == 0:
+            # Keep the last N checkpoints
+            if self.config.keep_last_n_checkpoints > 0:
+                prune_checkpoints(
+                    self.checkpoints_dir, 
+                    keep=self.config.keep_last_n_checkpoints,
+                    pattern="checkpoint_epoch_*.pth"
+                )
         
         # Log event
         self.log_event("checkpoint_saved", {
@@ -496,23 +1102,67 @@ class ResultsManager:
                 if values:
                     avg_test_metrics[f"avg_{key}"] = sum(values) / len(values)
         
+        # Handle model_architecture correctly when it's a list
+        model_arch = self.config.model_architecture
+        model_arch_value = model_arch if isinstance(model_arch, list) else model_arch.value
+        
+        # Extract training enhancements information
+        training_enhancements = {
+            "early_stopping": {
+                "enabled": self.config.use_early_stopping,
+                "patience": self.config.early_stopping_patience,
+                "min_delta": self.config.early_stopping_min_delta,
+                "metric": self.config.early_stopping_metric,
+                "mode": self.config.early_stopping_mode
+            },
+            "gradient_clipping": {
+                "enabled": self.config.use_gradient_clipping,
+                "max_norm": self.config.gradient_clipping_max_norm,
+                "adaptive": self.config.gradient_clipping_adaptive
+            },
+            "lr_scheduler": {
+                "type": self.config.lr_scheduler_type.value if hasattr(self.config.lr_scheduler_type, 'value') else self.config.lr_scheduler_type,
+                "params": self.config.lr_scheduler_params
+            },
+            "checkpointing": {
+                "save_best": self.config.save_best_checkpoint,
+                "frequency": self.config.checkpoint_frequency,
+                "keep_last_n": self.config.keep_last_n_checkpoints,
+                "keep_best_n": self.config.keep_best_n_checkpoints,
+                "resumable": self.config.resumable_training
+            }
+        }
+        
         # Create summary
         summary = {
             "experiment_id": self.config.experiment_id,
             "experiment_name": self.config.experiment_name,
             "dataset": self.config.dataset.value,
-            "model_architecture": self.config.model_architecture.value,
+            "model_architecture": model_arch_value,
             "preprocessing": self.config.preprocessing_config.name if self.config.preprocessing_config else "None",
+            "config_version": self.config.config_version,
             "training_params": {
                 "epochs": self.config.epochs,
                 "batch_size": self.config.batch_size,
-                "learning_rate": self.config.learning_rate
+                "learning_rate": self.config.learning_rate,
+                "random_seed": self.config.random_seed
             },
+            "training_enhancements": training_enhancements,
             "best_validation_metrics": best_val_metrics,
             "test_metrics": self.test_metrics,
             "average_test_metrics": avg_test_metrics,
             "completed_at": datetime.datetime.now().isoformat()
         }
+        
+        # Check if early stopping was triggered
+        early_stopping_trace_path = self.logs_dir / "early_stopping_trace.json"
+        if early_stopping_trace_path.exists():
+            try:
+                with open(early_stopping_trace_path, 'r') as f:
+                    early_stopping_info = json.load(f)
+                summary["early_stopping_info"] = early_stopping_info
+            except Exception as e:
+                logger.error(f"Error loading early stopping trace: {str(e)}")
         
         # Save summary to file
         summary_path = self.results_dir / "experiment_summary.json"
@@ -566,9 +1216,34 @@ class ExperimentManager:
     def __init__(self, model_registry: Optional[ModelRegistry] = None):
         """Initialize experiment manager."""
         self.model_registry = model_registry or ModelRegistry()
+    
+    def load_experiment_config(self, config_path: Union[str, Path]) -> ExperimentConfig:
+        """Load experiment configuration from file.
         
-    def run_experiment(self, config: ExperimentConfig) -> Dict[str, Any]:
-        """Run a face recognition experiment according to configuration."""
+        Automatically detects file format based on extension (.json or .yaml/.yml).
+        """
+        config_path = Path(config_path)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            
+        # Detect file format based on extension
+        if config_path.suffix.lower() in ['.yaml', '.yml']:
+            return ExperimentConfig.load_yaml(config_path)
+        elif config_path.suffix.lower() == '.json':
+            return ExperimentConfig.load(config_path)
+        else:
+            raise ValueError(f"Unsupported configuration file format: {config_path.suffix}")
+        
+    def run_experiment(self, config: Union[ExperimentConfig, str, Path]) -> Dict[str, Any]:
+        """Run a face recognition experiment according to configuration.
+        
+        Args:
+            config: Either an ExperimentConfig object or a path to a config file (.json/.yaml/.yml)
+        """
+        # If config is a string or Path, load it as a configuration file
+        if isinstance(config, (str, Path)):
+            config = self.load_experiment_config(config)
+            
         # Set up results manager
         results_manager = ResultsManager(config)
         
@@ -576,12 +1251,21 @@ class ExperimentManager:
         logger.info(f"Starting experiment: {config.experiment_name} (ID: {config.experiment_id})")
         logger.info(f"Configuration: {config.to_dict()}")
         
-        # Save experiment configuration
+        # Set random seeds for reproducibility
+        from .base_config import set_random_seeds
+        set_random_seeds(seed=config.random_seed)
+        logger.info(f"Random seed set to: {config.random_seed}")
+        
+        # Save experiment configuration in both JSON and YAML formats for reproducibility
         config.save()
+        config.save_yaml()
         
         # Determine experiment type based on configuration
         if config.dataset == ExperimentConfig.Dataset.BOTH and config.cross_dataset_testing:
             return self._run_cross_dataset_experiment(config, results_manager)
+        elif isinstance(config.model_architecture, list):
+            # If model_architecture is a list, run architecture comparison
+            return self._run_architecture_comparison_experiment(config, results_manager)
         elif len(config.model_architecture.value) == 1:
             return self._run_single_model_experiment(config, results_manager)
         else:
@@ -594,123 +1278,321 @@ class ExperimentManager:
             # Set up device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             
+            # Handle model_architecture correctly when it's a list
+            model_arch = config.model_architecture
+            model_arch_value = model_arch[0] if isinstance(model_arch, list) else model_arch.value
+            
+            # Import training utilities
+            from .training_utils import (
+                EarlyStopping, 
+                get_scheduler, 
+                apply_gradient_clipping,
+                plot_lr_schedule
+            )
+            
+            # Import resource monitoring utilities
+            from .advanced_metrics import TimerContext, ResourceMonitor
+            
             # Initialize model
-            model_arch = config.model_architecture.value
-            model = get_model(model_arch)
+            model = get_model(model_arch_value)
             model = model.to(device)
+            
+            # Record model complexity metrics
+            input_shape = (config.batch_size, 3, 224, 224)  # Typical input shape for face recognition
+            results_manager.record_model_complexity(model, input_shape)
             
             # Set up optimizer
             optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
             
             # Get criterion based on model type
-            criterion = get_criterion(model_arch)
+            criterion = get_criterion(model_arch_value)
             
-            # Setup data loaders
+            # Setup data loaders with seed for reproducibility
             train_loader, val_loader, test_loader, class_names = self._setup_data_loaders(
                 config.dataset.value, 
                 config.preprocessing_config, 
-                batch_size=config.batch_size
+                batch_size=config.batch_size,
+                seed=config.random_seed
             )
+            
+            # Set up learning rate scheduler if requested
+            scheduler = None
+            if config.lr_scheduler_type != ExperimentConfig.LRSchedulerType.NONE:
+                scheduler_type = config.lr_scheduler_type.value
+                # Calculate steps_per_epoch if needed for schedulers like OneCycleLR
+                if scheduler_type == "one_cycle":
+                    config.lr_scheduler_params['steps_per_epoch'] = len(train_loader)
+                    config.lr_scheduler_params['epochs'] = config.epochs
+                
+                scheduler = get_scheduler(
+                    scheduler_type=scheduler_type,
+                    optimizer=optimizer,
+                    **config.lr_scheduler_params
+                )
+                
+                # Plot and save LR schedule if a scheduler is used
+                if scheduler:
+                    plot_lr_schedule(
+                        scheduler=scheduler,
+                        optimizer=optimizer,
+                        num_epochs=config.epochs,
+                        save_path=results_manager.plots_dir / "lr_schedule.png"
+                    )
+            
+            # Set up early stopping if requested
+            early_stopping = None
+            if config.use_early_stopping:
+                early_stopping = EarlyStopping(
+                    patience=config.early_stopping_patience,
+                    min_delta=config.early_stopping_min_delta,
+                    mode=config.early_stopping_mode
+                )
+                logger.info(f"Early stopping enabled with patience={config.early_stopping_patience}, "
+                           f"min_delta={config.early_stopping_min_delta}, "
+                           f"mode={config.early_stopping_mode}")
+            
+            # Check if training should be resumed from checkpoint
+            start_epoch = 1
+            if config.resumable_training:
+                # Check for latest checkpoint
+                checkpoint_files = list(results_manager.checkpoints_dir.glob("checkpoint_epoch_*.pth"))
+                if checkpoint_files:
+                    # Sort by epoch number
+                    checkpoint_files.sort(key=lambda x: int(str(x).split('_')[-1].split('.')[0]))
+                    latest_checkpoint = checkpoint_files[-1]
+                    
+                    logger.info(f"Resuming training from checkpoint: {latest_checkpoint}")
+                    checkpoint = torch.load(latest_checkpoint, map_location=device)
+                    
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    
+                    # Restore scheduler state if available
+                    if scheduler and 'scheduler_state_dict' in checkpoint:
+                        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                    
+                    # Set start epoch
+                    start_epoch = checkpoint['epoch'] + 1
+                    logger.info(f"Starting from epoch {start_epoch}")
+            
+            # Set up resource monitor for training
+            resource_monitor = ResourceMonitor(log_interval=5)
+            resource_monitor.start()
             
             # Training loop
             best_val_accuracy = 0
+            best_val_loss = float('inf')
             train_losses = []
             val_losses = []
             val_accuracies = []
             
-            for epoch in range(1, config.epochs + 1):
-                # Training phase
-                model.train()
-                running_loss = 0.0
-                
-                for inputs, labels in train_loader:
-                    inputs, labels = inputs.to(device), labels.to(device)
+            # Use timer to measure overall training time
+            with TimerContext("Training") as training_timer:
+                for epoch in range(start_epoch, config.epochs + 1):
+                    # Training phase
+                    model.train()
+                    running_loss = 0.0
                     
-                    # Zero gradients
-                    optimizer.zero_grad()
+                    # Use timer to measure epoch time
+                    with TimerContext(f"Epoch {epoch}") as epoch_timer:
+                        for inputs, labels in train_loader:
+                            inputs, labels = inputs.to(device), labels.to(device)
+                            
+                            # Zero gradients
+                            optimizer.zero_grad()
+                            
+                            # Forward pass
+                            if model_arch_value == 'siamese':
+                                output1, output2 = model(inputs[0], inputs[1])
+                                loss = criterion(output1, output2, labels)
+                            elif model_arch_value == 'arcface':
+                                outputs = model(inputs, labels)
+                                loss = criterion(outputs, labels)
+                            else:
+                                outputs = model(inputs)
+                                loss = criterion(outputs, labels)
+                            
+                            # Backward pass
+                            loss.backward()
+                            
+                            # Apply gradient clipping if enabled
+                            if config.use_gradient_clipping:
+                                apply_gradient_clipping(
+                                    model=model,
+                                    max_norm=config.gradient_clipping_max_norm,
+                                    adaptive=config.gradient_clipping_adaptive,
+                                    model_type=model_arch_value
+                                )
+                            
+                            # Optimize
+                            optimizer.step()
+                            
+                            running_loss += loss.item()
                     
-                    # Forward pass
-                    if model_arch == 'siamese':
-                        output1, output2 = model(inputs[0], inputs[1])
-                        loss = criterion(output1, output2, labels)
-                    elif model_arch == 'arcface':
-                        outputs = model(inputs, labels)
-                        loss = criterion(outputs, labels)
+                    epoch_loss = running_loss / len(train_loader)
+                    train_losses.append(epoch_loss)
+                    
+                    # Record training metrics
+                    results_manager.record_training_metrics(epoch, {
+                        "loss": epoch_loss,
+                        "epoch_time": epoch_timer.elapsed_time
+                    })
+                    
+                    # Validation phase
+                    model.eval()
+                    val_loss = 0.0
+                    correct = 0
+                    total = 0
+                    
+                    # For validation calibration (store predictions and ground truth)
+                    val_preds = []
+                    val_true = []
+                    val_scores = []
+                    
+                    with torch.no_grad():
+                        for inputs, labels in val_loader:
+                            inputs, labels = inputs.to(device), labels.to(device)
+                            
+                            if model_arch_value == 'siamese':
+                                output1, output2 = model(inputs[0], inputs[1])
+                                loss = criterion(output1, output2, labels)
+                                preds = (F.pairwise_distance(output1, output2) < 0.5).float()
+                                correct += (preds == labels).sum().item()
+                                
+                                # Store predictions for calibration
+                                val_preds.extend(preds.cpu().numpy())
+                                val_true.extend(labels.cpu().numpy())
+                                val_scores.extend(F.pairwise_distance(output1, output2).cpu().numpy())
+                                
+                            elif model_arch_value == 'arcface':
+                                embeddings = model(inputs)
+                                outputs = F.linear(
+                                    F.normalize(embeddings), 
+                                    F.normalize(model.arcface.weight)
+                                )
+                                loss = criterion(outputs, labels)
+                                _, preds = torch.max(outputs, 1)
+                                correct += (preds == labels).sum().item()
+                                
+                                # Store predictions for calibration
+                                val_preds.extend(preds.cpu().numpy())
+                                val_true.extend(labels.cpu().numpy())
+                                val_scores.extend(F.softmax(outputs, dim=1).cpu().numpy())
+                                
+                            else:
+                                outputs = model(inputs)
+                                loss = criterion(outputs, labels)
+                                _, preds = torch.max(outputs, 1)
+                                correct += (preds == labels).sum().item()
+                                
+                                # Store predictions for calibration
+                                val_preds.extend(preds.cpu().numpy())
+                                val_true.extend(labels.cpu().numpy())
+                                val_scores.extend(F.softmax(outputs, dim=1).cpu().numpy())
+                            
+                            val_loss += loss.item()
+                            total += labels.size(0)
+                    
+                    epoch_val_loss = val_loss / len(val_loader)
+                    val_losses.append(epoch_val_loss)
+                    
+                    accuracy = 100 * correct / total
+                    val_accuracies.append(accuracy)
+                    
+                    # Record validation metrics
+                    val_metrics = {
+                        "loss": epoch_val_loss,
+                        "accuracy": accuracy
+                    }
+                    results_manager.record_evaluation_metrics(epoch, val_metrics)
+                    
+                    # Record per-class and calibration metrics on validation set periodically
+                    if epoch % 5 == 0 or epoch == config.epochs:
+                        # Convert predictions array for calibration metrics
+                        val_scores_array = np.array(val_scores)
+                        
+                        # Record validation per-class metrics
+                        results_manager.record_per_class_metrics(
+                            val_true, val_preds, val_scores_array, class_names, dataset="validation"
+                        )
+                        
+                        # Record validation calibration metrics
+                        results_manager.record_calibration_metrics(
+                            val_true, val_preds, val_scores_array, dataset="validation"
+                        )
+                    
+                    # Step learning rate scheduler if it's a validation-based scheduler
+                    if scheduler:
+                        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                            metric_value = epoch_val_loss if config.early_stopping_metric == "loss" else -accuracy
+                            scheduler.step(metric_value)
+                    
+                    # Save checkpoint if this is the best model (by accuracy or loss)
+                    is_best = False
+                    if config.early_stopping_mode == 'max':
+                        # For metrics like accuracy where higher is better
+                        is_best = accuracy > best_val_accuracy
+                        if is_best:
+                            best_val_accuracy = accuracy
                     else:
-                        outputs = model(inputs)
-                        loss = criterion(outputs, labels)
+                        # For metrics like loss where lower is better
+                        is_best = epoch_val_loss < best_val_loss
+                        if is_best:
+                            best_val_loss = epoch_val_loss
                     
-                    # Backward pass and optimize
-                    loss.backward()
-                    optimizer.step()
+                    # Save checkpoint with appropriate frequency
+                    if epoch % config.checkpoint_frequency == 0 or is_best:
+                        results_manager.save_model_checkpoint(
+                            model=model, 
+                            optimizer=optimizer, 
+                            epoch=epoch, 
+                            is_best=is_best,
+                            scheduler=scheduler,
+                            metrics=val_metrics
+                        )
                     
-                    running_loss += loss.item()
-                
-                epoch_loss = running_loss / len(train_loader)
-                train_losses.append(epoch_loss)
-                
-                # Record training metrics
-                results_manager.record_training_metrics(epoch, {
-                    "loss": epoch_loss
-                })
-                
-                # Validation phase
-                model.eval()
-                val_loss = 0.0
-                correct = 0
-                total = 0
-                
-                with torch.no_grad():
-                    for inputs, labels in val_loader:
-                        inputs, labels = inputs.to(device), labels.to(device)
+                    # Log progress
+                    logger.info(f'Epoch {epoch}/{config.epochs}, '
+                              f'Train Loss: {epoch_loss:.4f}, '
+                              f'Val Loss: {epoch_val_loss:.4f}, '
+                              f'Accuracy: {accuracy:.2f}%, '
+                              f'LR: {optimizer.param_groups[0]["lr"]:.6f}, '
+                              f'Time: {epoch_timer.elapsed_time:.2f}s')
+                    
+                    # Step learning rate scheduler if it's an epoch-based scheduler
+                    if scheduler and not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                        scheduler.step()
+                    
+                    # Check early stopping if enabled
+                    if early_stopping:
+                        # Use appropriate metric for early stopping
+                        if config.early_stopping_metric == "loss":
+                            improvement = early_stopping(epoch_val_loss)
+                        else:  # Use accuracy
+                            # Negate accuracy for 'min' mode
+                            es_value = -accuracy if early_stopping.mode == 'min' else accuracy
+                            improvement = early_stopping(es_value)
                         
-                        if model_arch == 'siamese':
-                            output1, output2 = model(inputs[0], inputs[1])
-                            loss = criterion(output1, output2, labels)
-                            preds = (F.pairwise_distance(output1, output2) < 0.5).float()
-                            correct += (preds == labels).sum().item()
-                        elif model_arch == 'arcface':
-                            embeddings = model(inputs)
-                            outputs = F.linear(
-                                F.normalize(embeddings), 
-                                F.normalize(model.arcface.weight)
-                            )
-                            loss = criterion(outputs, labels)
-                            _, preds = torch.max(outputs, 1)
-                            correct += (preds == labels).sum().item()
-                        else:
-                            outputs = model(inputs)
-                            loss = criterion(outputs, labels)
-                            _, preds = torch.max(outputs, 1)
-                            correct += (preds == labels).sum().item()
-                        
-                        val_loss += loss.item()
-                        total += labels.size(0)
-                
-                epoch_val_loss = val_loss / len(val_loader)
-                val_losses.append(epoch_val_loss)
-                
-                accuracy = 100 * correct / total
-                val_accuracies.append(accuracy)
-                
-                # Record validation metrics
-                results_manager.record_evaluation_metrics(epoch, {
-                    "loss": epoch_val_loss,
-                    "accuracy": accuracy
-                })
-                
-                # Save checkpoint if this is the best model
-                is_best = accuracy > best_val_accuracy
-                if is_best:
-                    best_val_accuracy = accuracy
-                
-                results_manager.save_model_checkpoint(model, optimizer, epoch, is_best)
-                
-                # Log progress
-                logger.info(f'Epoch {epoch}/{config.epochs}, '
-                          f'Train Loss: {epoch_loss:.4f}, '
-                          f'Val Loss: {epoch_val_loss:.4f}, '
-                          f'Accuracy: {accuracy:.2f}%')
+                        # Check if training should be stopped
+                        if early_stopping.early_stop:
+                            logger.info(f"Early stopping triggered at epoch {epoch}")
+                            # Save early stopping trace to a file
+                            with open(results_manager.logs_dir / "early_stopping_trace.json", 'w') as f:
+                                json.dump({
+                                    "trace": early_stopping.trace,
+                                    "stopped_epoch": epoch,
+                                    "best_score": early_stopping.best_score,
+                                    "mode": early_stopping.mode
+                                }, f, indent=2)
+                            break
+            
+            # Stop resource monitoring for training
+            training_resource_data = resource_monitor.stop()
+            training_resource_data["total_time"] = training_timer.elapsed_time
+            training_resource_data["epochs_completed"] = epoch - start_epoch + 1
+            
+            # Record resource metrics for training
+            results_manager.record_resource_metrics(training_resource_data, "training")
             
             # Record learning curves
             results_manager.record_learning_curves(train_losses, val_losses, val_accuracies)
@@ -720,34 +1602,85 @@ class ExperimentManager:
             model.load_state_dict(torch.load(results_manager.checkpoints_dir / "best_model.pth"))
             model.eval()
             
-            # Evaluate on test set
-            all_labels = []
-            all_preds = []
-            all_probs = []
+            # Start resource monitoring for inference
+            inference_monitor = ResourceMonitor(log_interval=1)
+            inference_monitor.start()
             
-            with torch.no_grad():
-                for inputs, labels in test_loader:
-                    inputs, labels = inputs.to(device), labels.to(device)
-                    
-                    if model_arch == 'siamese':
-                        output1, output2 = model(inputs[0], inputs[1])
-                        preds = (F.pairwise_distance(output1, output2) < 0.5).float()
-                        all_probs.extend(F.pairwise_distance(output1, output2).cpu().numpy())
-                    elif model_arch == 'arcface':
-                        embeddings = model(inputs)
-                        outputs = F.linear(
-                            F.normalize(embeddings), 
-                            F.normalize(model.arcface.weight)
-                        )
-                        _, preds = torch.max(outputs, 1)
-                        all_probs.extend(F.softmax(outputs, dim=1).cpu().numpy())
-                    else:
-                        outputs = model(inputs)
-                        _, preds = torch.max(outputs, 1)
-                        all_probs.extend(F.softmax(outputs, dim=1).cpu().numpy())
-                    
-                    all_preds.extend(preds.cpu().numpy())
-                    all_labels.extend(labels.cpu().numpy())
+            # Use timer to measure inference time
+            with TimerContext("Inference") as inference_timer:
+                # Evaluate on test set
+                all_labels = []
+                all_preds = []
+                all_probs = []
+                all_logits = []
+                sample_filenames = []  # For tracking which samples are misclassified
+                
+                with torch.no_grad():
+                    for batch_idx, (inputs, labels) in enumerate(test_loader):
+                        inputs, labels = inputs.to(device), labels.to(device)
+                        
+                        # Use timer to measure batch inference time
+                        with TimerContext(f"Batch {batch_idx}") as batch_timer:
+                            if model_arch_value == 'siamese':
+                                output1, output2 = model(inputs[0], inputs[1])
+                                distances = F.pairwise_distance(output1, output2)
+                                preds = (distances < 0.5).float()
+                                
+                                # Store predictions
+                                all_probs.extend(distances.cpu().numpy())
+                                all_logits.extend(distances.cpu().numpy())  # Same as probs for siamese
+                                
+                            elif model_arch_value == 'arcface':
+                                embeddings = model(inputs)
+                                logits = F.linear(
+                                    F.normalize(embeddings), 
+                                    F.normalize(model.arcface.weight)
+                                )
+                                probs = F.softmax(logits, dim=1)
+                                _, preds = torch.max(logits, 1)
+                                
+                                # Store predictions
+                                all_probs.extend(probs.cpu().numpy())
+                                all_logits.extend(logits.cpu().numpy())
+                                
+                            else:
+                                logits = model(inputs)
+                                probs = F.softmax(logits, dim=1)
+                                _, preds = torch.max(logits, 1)
+                                
+                                # Store predictions
+                                all_probs.extend(probs.cpu().numpy())
+                                all_logits.extend(logits.cpu().numpy())
+                        
+                        # Collect batch inference time
+                        if batch_idx == 0:
+                            # First batch may include warm-up overhead, record separately
+                            first_batch_time = batch_timer.elapsed_time
+                        
+                        all_preds.extend(preds.cpu().numpy())
+                        all_labels.extend(labels.cpu().numpy())
+                
+                # Convert lists to arrays for easier processing
+                all_labels = np.array(all_labels)
+                all_preds = np.array(all_preds)
+                
+                # Handle shape of probability outputs based on model type
+                if model_arch_value == 'siamese':
+                    all_probs = np.array(all_probs).reshape(-1, 1)
+                else:
+                    all_probs = np.array(all_probs)
+                
+                all_logits = np.array(all_logits)
+            
+            # Stop resource monitoring for inference
+            inference_resource_data = inference_monitor.stop()
+            inference_resource_data["total_time"] = inference_timer.elapsed_time
+            inference_resource_data["samples_processed"] = len(all_labels)
+            inference_resource_data["samples_per_second"] = len(all_labels) / inference_timer.elapsed_time
+            inference_resource_data["first_batch_time"] = first_batch_time
+            
+            # Record resource metrics for inference
+            results_manager.record_resource_metrics(inference_resource_data, "inference")
             
             # Calculate metrics
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -756,28 +1689,47 @@ class ExperimentManager:
                 "accuracy": accuracy_score(all_labels, all_preds) * 100,
                 "precision": precision_score(all_labels, all_preds, average='weighted', zero_division=0),
                 "recall": recall_score(all_labels, all_preds, average='weighted', zero_division=0),
-                "f1_score": f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+                "f1_score": f1_score(all_labels, all_preds, average='weighted', zero_division=0),
+                "inference_time_total": inference_timer.elapsed_time,
+                "inference_time_per_sample": inference_timer.elapsed_time / len(all_labels),
+                "inference_samples_per_second": len(all_labels) / inference_timer.elapsed_time
             }
             
             # Record test metrics
             results_manager.record_test_metrics(test_metrics)
             
-            # Record confusion matrix
+            # Record confusion matrix with enhanced metrics
             results_manager.record_confusion_matrix(all_labels, all_preds, class_names)
             
+            # Record per-class metrics
+            results_manager.record_per_class_metrics(all_labels, all_preds, all_probs, class_names)
+            
+            # Record calibration metrics
+            results_manager.record_calibration_metrics(all_labels, all_preds, all_probs)
+            
+            # Save raw predictions for post-hoc analysis
+            results_manager.save_raw_predictions(all_labels, all_preds, all_probs, class_names)
+            
+            # Include training enhancement details in parameters
+            enhancement_params = {
+                "preprocessing": config.preprocessing_config.name if config.preprocessing_config else "default",
+                "epochs": config.epochs,
+                "batch_size": config.batch_size,
+                "learning_rate": config.learning_rate,
+                "early_stopping": config.use_early_stopping,
+                "gradient_clipping": config.use_gradient_clipping,
+                "lr_scheduler": config.lr_scheduler_type.value,
+                "random_seed": config.random_seed
+            }
+            
             # Register model with registry
-            model_name = f"{model_arch}_{config.dataset.value}_{config.experiment_id}"
+            model_name = f"{model_arch_value}_{config.dataset.value}_{config.experiment_id}"
             self.model_registry.register_model(
                 model_name=model_name,
-                architecture=model_arch,
+                architecture=model_arch_value,
                 dataset_name=config.dataset.value,
                 experiment_id=config.experiment_id,
-                parameters={
-                    "preprocessing": config.preprocessing_config.name if config.preprocessing_config else "default",
-                    "epochs": config.epochs,
-                    "batch_size": config.batch_size,
-                    "learning_rate": config.learning_rate
-                },
+                parameters=enhancement_params,
                 metrics=test_metrics,
                 checkpoint_path=results_manager.checkpoints_dir / "best_model.pth"
             )
@@ -792,6 +1744,8 @@ class ExperimentManager:
         
         except Exception as e:
             logger.error(f"Error running experiment: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             results_manager.log_event("experiment_error", {"error": str(e)})
             raise
     
@@ -799,11 +1753,15 @@ class ExperimentManager:
                                     results_manager: ResultsManager) -> Dict[str, Any]:
         """Run an experiment testing models trained on one dataset against the other."""
         try:
+            # Handle model_architecture correctly when it's a list
+            model_arch = config.model_architecture
+            model_arch_value = model_arch if isinstance(model_arch, list) else model_arch.value
+            
             # Create a summary dictionary to store results
             cross_dataset_summary = {
                 "experiment_id": config.experiment_id,
                 "experiment_name": config.experiment_name,
-                "model_architecture": config.model_architecture.value,
+                "model_architecture": model_arch_value,
                 "datasets": ["dataset1", "dataset2"],
                 "results": {}
             }
@@ -821,7 +1779,9 @@ class ExperimentManager:
                     batch_size=config.batch_size,
                     learning_rate=config.learning_rate,
                     cross_dataset_testing=False,
-                    results_dir=str(config.results_dir / dataset.value)
+                    results_dir=str(config.results_dir / dataset.value),
+                    random_seed=config.random_seed,  # Pass the random seed for reproducibility
+                    config_version=config.config_version
                 )
                 
                 # Run experiment for this dataset
@@ -843,16 +1803,17 @@ class ExperimentManager:
                 
                 # Load model
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                model = get_model(config.model_architecture.value)
+                model = get_model(model_arch_value)
                 model.load_state_dict(torch.load(model_checkpoint, map_location=device))
                 model.to(device)
                 model.eval()
                 
-                # Setup test loader for other dataset
+                # Setup test loader for other dataset with the same random seed
                 _, _, test_loader, class_names = self._setup_data_loaders(
                     other_dataset.value, 
                     config.preprocessing_config, 
-                    batch_size=config.batch_size
+                    batch_size=config.batch_size,
+                    seed=config.random_seed  # Use the same seed for reproducibility
                 )
                 
                 # Test the model
@@ -863,10 +1824,10 @@ class ExperimentManager:
                     for inputs, labels in test_loader:
                         inputs, labels = inputs.to(device), labels.to(device)
                         
-                        if config.model_architecture.value == 'siamese':
+                        if model_arch_value == 'siamese':
                             output1, output2 = model(inputs[0], inputs[1])
                             preds = (F.pairwise_distance(output1, output2) < 0.5).float()
-                        elif config.model_architecture.value == 'arcface':
+                        elif model_arch_value == 'arcface':
                             embeddings = model(inputs)
                             outputs = F.linear(
                                 F.normalize(embeddings), 
@@ -930,8 +1891,11 @@ class ExperimentManager:
             }
             
             # Determine which architectures to compare
-            if isinstance(config.model_architecture.value, list):
-                architectures = config.model_architecture.value
+            if isinstance(config.model_architecture, list):
+                architectures = config.model_architecture
+            elif hasattr(config.model_architecture, 'value'):
+                # Handle the case when it's an enum
+                architectures = [config.model_architecture.value]
             else:
                 # If not specified, compare all architectures
                 architectures = [arch.value for arch in ExperimentConfig.ModelArchitecture]
@@ -951,7 +1915,9 @@ class ExperimentManager:
                     batch_size=config.batch_size,
                     learning_rate=config.learning_rate,
                     cross_dataset_testing=False,
-                    results_dir=str(config.results_dir / arch)
+                    results_dir=str(config.results_dir / arch),
+                    random_seed=config.random_seed,  # Pass the random seed for reproducibility
+                    config_version=config.config_version
                 )
                 
                 # Run experiment for this architecture
@@ -1045,10 +2011,15 @@ class ExperimentManager:
         plt.close()
     
     def _setup_data_loaders(self, dataset_name: str, preprocessing_config: PreprocessingConfig, 
-                         batch_size: int = 32):
+                         batch_size: int = 32, seed: int = 42):
         """Set up data loaders for training, validation and testing."""
         from torch.utils.data import DataLoader
         from torchvision import datasets, transforms
+        import torch.utils.data
+        
+        # Set generator with specific seed for reproducible data splitting
+        g = torch.Generator()
+        g.manual_seed(seed)
         
         # Define transforms
         transform = transforms.Compose([
@@ -1074,10 +2045,27 @@ class ExperimentManager:
         val_dataset = datasets.ImageFolder(data_dir / "val", transform=transform)
         test_dataset = datasets.ImageFolder(data_dir / "test", transform=transform)
         
-        # Create data loaders
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+        # Create data loaders with seed-controlled randomness
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True, 
+            num_workers=4, 
+            generator=g,
+            worker_init_fn=lambda worker_id: torch.initial_seed() + worker_id
+        )
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4
+        )
+        test_loader = DataLoader(
+            test_dataset, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4
+        )
         
         return train_loader, val_loader, test_loader, train_dataset.classes 
 
@@ -1313,7 +2301,8 @@ class CrossArchitectureExperiment:
             epochs=epochs,
             batch_size=batch_size,
             learning_rate=learning_rate,
-            cross_dataset_testing=False
+            cross_dataset_testing=False,
+            results_dir=str(self.results_dir / "architecture_comparison")
         )
         
         # Run experiment
@@ -1917,6 +2906,12 @@ def create_command_line_interface():
     parser = argparse.ArgumentParser(description="Face Recognition Experiment Manager")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
+    # Run experiment from config file
+    parser_run = subparsers.add_parser("run", 
+                                     help="Run experiment from config file")
+    parser_run.add_argument("config_file", type=str,
+                          help="Path to experiment configuration file (JSON or YAML)")
+    
     # Dataset Comparison experiment
     parser_dataset = subparsers.add_parser("dataset-comparison", 
                                           help="Run dataset comparison experiment")
@@ -1928,6 +2923,8 @@ def create_command_line_interface():
                               help="Batch size for training")
     parser_dataset.add_argument("--learning-rate", type=float, default=0.001,
                               help="Learning rate for training")
+    parser_dataset.add_argument("--output-config", type=str,
+                              help="Save configuration to file (specify .json or .yaml extension)")
     
     # Architecture Comparison experiment
     parser_arch = subparsers.add_parser("architecture-comparison", 
@@ -1943,6 +2940,8 @@ def create_command_line_interface():
                            help="Batch size for training")
     parser_arch.add_argument("--learning-rate", type=float, default=0.001,
                            help="Learning rate for training")
+    parser_arch.add_argument("--output-config", type=str,
+                           help="Save configuration to file (specify .json or .yaml extension)")
     
     # Hyperparameter Optimization experiment
     parser_hyperopt = subparsers.add_parser("hyperparameter-optimization",
@@ -1955,13 +2954,15 @@ def create_command_line_interface():
                                help="Number of optimization trials")
     parser_hyperopt.add_argument("--timeout", type=int, default=7200,
                                help="Timeout in seconds")
+    parser_hyperopt.add_argument("--output-config", type=str,
+                               help="Save configuration to file (specify .json or .yaml extension)")
     
     # Generate report
     parser_report = subparsers.add_parser("generate-report",
                                         help="Generate report from experiment results")
     parser_report.add_argument("--experiment-ids", type=str, nargs="+", required=True,
                              help="Experiment IDs to include in report")
-    parser_report.add_argument("--format", type=str, choices=["json", "pptx", "excel"],
+    parser_report.add_argument("--format", type=str, choices=["json", "pptx", "excel", "yaml"],
                              default="json", help="Report format")
     parser_report.add_argument("--output", type=str, help="Output file path")
     
@@ -1977,38 +2978,154 @@ def create_command_line_interface():
 def main():
     parser = create_command_line_interface()
     args = parser.parse_args()
+    
+    # Create experiment manager
+    experiment_manager = ExperimentManager()
 
-    if args.command == "dataset-comparison":
-        experiment_manager = ExperimentManager()
-        results = DatasetComparisonExperiment(experiment_manager).run(
+    if args.command == "run":
+        # Run experiment from config file
+        results = experiment_manager.run_experiment(args.config_file)
+        print(f"Experiment Results: {results}")
+    elif args.command == "dataset-comparison":
+        # Create dataset comparison experiment
+        experiment = DatasetComparisonExperiment(
+            experiment_manager=experiment_manager,
+            model_architecture=args.architecture,
+        )
+        
+        # If output config is specified, save the configuration
+        if hasattr(args, 'output_config') and args.output_config:
+            # Create config
+            config = ExperimentConfig(
+                experiment_name=f"Dataset Comparison - {args.architecture}",
+                dataset=ExperimentConfig.Dataset.BOTH,
+                model_architecture=args.architecture,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                cross_dataset_testing=True
+            )
+            
+            # Save config file
+            output_path = Path(args.output_config)
+            if output_path.suffix.lower() in ['.yaml', '.yml']:
+                config.save_yaml(output_path)
+            else:
+                config.save(output_path)
+            print(f"Configuration saved to: {output_path}")
+            return
+        
+        # Run experiment
+        results = experiment.run(
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate
         )
         print(f"Dataset Comparison Results: {results}")
     elif args.command == "architecture-comparison":
-        experiment_manager = ExperimentManager()
-        results = CrossArchitectureExperiment(experiment_manager, args.architectures, args.dataset).run(
+        # Create architecture comparison experiment
+        experiment = CrossArchitectureExperiment(
+            experiment_manager=experiment_manager, 
+            architectures=args.architectures, 
+            dataset=args.dataset
+        )
+        
+        # If output config is specified, save the configuration
+        if hasattr(args, 'output_config') and args.output_config:
+            # Create config
+            config = ExperimentConfig(
+                experiment_name=f"Architecture Comparison - {args.dataset}",
+                dataset=args.dataset,
+                model_architecture=args.architectures,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                cross_dataset_testing=False
+            )
+            
+            # Save config file
+            output_path = Path(args.output_config)
+            if output_path.suffix.lower() in ['.yaml', '.yml']:
+                config.save_yaml(output_path)
+            else:
+                config.save(output_path)
+            print(f"Configuration saved to: {output_path}")
+            return
+        
+        # Run experiment
+        results = experiment.run(
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate
         )
         print(f"Architecture Comparison Results: {results}")
     elif args.command == "hyperparameter-optimization":
-        experiment_manager = ExperimentManager()
-        results = HyperparameterExperiment(experiment_manager).run()
+        # Create hyperparameter optimization experiment
+        experiment = HyperparameterExperiment(
+            experiment_manager=experiment_manager,
+            model_architecture=args.architecture,
+            dataset=args.dataset,
+            n_trials=args.n_trials,
+            timeout=args.timeout
+        )
+        
+        # If output config is specified, save the configuration
+        if hasattr(args, 'output_config') and args.output_config:
+            # Create a base config for hyperparameter optimization
+            config = ExperimentConfig(
+                experiment_name=f"Hyperparameter Optimization - {args.architecture}",
+                dataset=args.dataset,
+                model_architecture=args.architecture,
+                cross_dataset_testing=False
+            )
+            
+            # Add hyperopt-specific settings
+            hyperopt_config = {
+                "experiment_type": "hyperparameter_optimization",
+                "n_trials": args.n_trials,
+                "timeout": args.timeout,
+                "base_config": config.to_dict()
+            }
+            
+            # Save config file
+            output_path = Path(args.output_config)
+            if output_path.suffix.lower() in ['.yaml', '.yml']:
+                with open(output_path, 'w') as f:
+                    yaml.dump(hyperopt_config, f, default_flow_style=False, sort_keys=False)
+            else:
+                with open(output_path, 'w') as f:
+                    json.dump(hyperopt_config, f, indent=2)
+            print(f"Configuration saved to: {output_path}")
+            return
+        
+        # Run experiment
+        results = experiment.run()
         print(f"Hyperparameter Optimization Results: {results}")
     elif args.command == "generate-report":
         results_compiler = ResultsCompiler()
         if args.format == "json":
-            results_compiler.generate_comparative_report(args.experiment_ids, args.output)
+            output_path = results_compiler.generate_comparative_report(args.experiment_ids, args.output)
+            print(f"JSON report generated at: {output_path}")
+        elif args.format == "yaml":
+            # Generate report in YAML format
+            report = results_compiler.compile_experiment_summary(args.experiment_ids[0]) if len(args.experiment_ids) == 1 else {
+                "experiment_ids": args.experiment_ids,
+                "summaries": [results_compiler.compile_experiment_summary(exp_id) for exp_id in args.experiment_ids]
+            }
+            
+            output_path = args.output or Path(f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml")
+            with open(output_path, 'w') as f:
+                yaml.dump(report, f, default_flow_style=False, sort_keys=False)
+            print(f"YAML report generated at: {output_path}")
         elif args.format == "pptx":
-            results_compiler.generate_powerpoint_report(args.experiment_ids, args.output)
+            output_path = results_compiler.generate_powerpoint_report(args.experiment_ids, args.output)
+            print(f"PowerPoint report generated at: {output_path}")
         elif args.format == "excel":
-            results_compiler.export_to_excel(args.experiment_ids, args.output)
+            output_path = results_compiler.export_to_excel(args.experiment_ids, args.output)
+            print(f"Excel report generated at: {output_path}")
     elif args.command == "resume":
-        experiment_manager = ExperimentManager()
-        results = experiment_manager.run_experiment(ExperimentConfig(experiment_id=args.experiment_id))
+        # Resume experiment using stored configuration
+        results = experiment_manager.run_experiment(args.experiment_id)
         print(f"Resumed Experiment Results: {results}")
     else:
         parser.print_help()

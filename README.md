@@ -17,6 +17,7 @@ This project was developed for the COMP 380 Neural Networks class to help Alzhei
 - **Data Preprocessing**: Face detection, alignment, and data augmentation
 - **Model Training & Evaluation**: Customizable parameters
 - **Hyperparameter Tuning**: Uses Optuna to find optimal settings
+- **Comprehensive Experiment Tracking**: MLflow and Weights & Biases integration to monitor experiments
 
 ## Installation
 
@@ -114,6 +115,11 @@ epochs: 30
 batch_size: 32
 learning_rate: 0.001
 cross_dataset_testing: true
+tracker_type: "mlflow"  # Options: "mlflow", "wandb", "none"
+track_metrics: true
+track_params: true
+track_artifacts: true
+track_models: true
 ```
 
 You can also generate a template configuration:
@@ -158,6 +164,103 @@ The test suite covers:
 - Cross-dataset testing
 - Architecture comparison
 
+## Experiment Tracking
+
+The system includes comprehensive experiment tracking integration with MLflow and Weights & Biases.
+
+### MLflow Tracking
+
+MLflow is used by default to track experiment metrics, parameters, artifacts, and models:
+
+```
+# Run an experiment with MLflow tracking (default)
+python run.py experiment --config my_experiment.yaml
+
+# Run an experiment with specific tracking system
+python run.py experiment --config my_experiment.yaml --track mlflow
+
+# Run an experiment without tracking
+python run.py experiment --config my_experiment.yaml --no-track
+```
+
+To view MLflow dashboard and experiment results:
+
+```
+# View the MLflow dashboard
+python run.py dashboard --type mlflow
+
+# Compare specific runs
+python run.py dashboard --type mlflow --compare run1_id run2_id --metrics accuracy precision recall
+```
+
+### Weights & Biases Integration
+
+The system also supports Weights & Biases for experiment tracking:
+
+```
+# Run with W&B tracking
+python run.py experiment --config my_experiment.yaml --track wandb
+```
+
+To configure W&B, set your entity and project in `base_config.py` or environment variables:
+
+```python
+# in base_config.py
+WANDB_PROJECT = "face-recognition"
+WANDB_ENTITY = "your-username"  # or team name
+```
+
+To view W&B dashboard and experiment results:
+
+```
+# Get the W&B dashboard URL
+python run.py dashboard --type wandb
+
+# List experiments tracked with W&B
+python run.py list-models --runs --tracker wandb
+```
+
+### Tracking Features
+
+The experiment tracking system includes:
+
+- **Metric Tracking**: Automatically logs training, validation, and test metrics
+- **Parameter Tracking**: Records all experiment configuration parameters
+- **Artifact Logging**: Saves visualizations, confusion matrices, and results
+- **Model Registry**: Logs and versions trained models
+- **Experiment Comparison**: Compare metrics across different experiment runs
+- **Run History**: Maintains searchable history of all experiment runs
+
+### Unified Dashboard Interface
+
+The system provides a unified dashboard interface to interact with tracking systems:
+
+```python
+from src.tracking import ExperimentTracker, ExperimentDashboard
+
+# Create tracker
+tracker = ExperimentTracker.create("mlflow")
+tracker.initialize("My Experiment")
+
+# Create dashboard interface
+dashboard = ExperimentDashboard(tracker)
+
+# Get recent runs
+runs = dashboard.get_recent_runs(limit=5)
+
+# Compare metrics across runs
+dashboard.compare_metrics(
+    ["run_id1", "run_id2"], 
+    ["accuracy", "precision", "recall"]
+)
+
+# Filter runs by metrics
+dashboard.filter_runs_by_metrics({
+    "accuracy": (">", 0.9),
+    "loss": ("<", 0.1)
+})
+```
+
 ## Project Structure
 
 ```
@@ -167,7 +270,10 @@ The test suite covers:
 │   └── processed/          # Preprocessed face images
 ├── outputs/
 │   ├── checkpoints/        # Saved models
-│   └── visualizations/     # Training curves and visualizations
+│   ├── visualizations/     # Training curves and visualizations
+│   └── tracking/           # Experiment tracking data
+│       ├── mlflow/         # MLflow tracking files
+│       └── wandb/          # W&B tracking files
 ├── src/
 │   ├── base_config.py      # Configuration and paths
 │   ├── data_prep.py        # Data preprocessing
@@ -179,6 +285,8 @@ The test suite covers:
 │   ├── training.py         # Model training
 │   ├── training_utils.py   # Advanced training utilities
 │   ├── experiment_manager.py # Experiment configuration and execution
+│   ├── tracking.py         # Experiment tracking abstraction
+│   ├── advanced_metrics.py # Enhanced evaluation metrics
 │   └── visualize.py        # Visualization functions
 ├── tests/                  # Unit tests
 ├── requirements.txt        # Required packages
@@ -322,8 +430,6 @@ The framework provides comprehensive evaluation capabilities to understand model
 
 These detailed metrics help identify model weaknesses, improve reliability, and optimize resource usage in production deployments.
 
-## Project Structure
-
 ## Development Journey
 
 I started this project with high ambitions but quickly faced reality - deep learning is hard! My journey went something like this:
@@ -337,7 +443,6 @@ I started this project with high ambitions but quickly faced reality - deep lear
 4. **My first all-nighter**: Spent all night fixing a mysterious bug where validation accuracy would randomly drop to 0%. Turned out to be a subtle issue with my data loader.
 
 5. **Discovering Siamese networks**: After reading up on face recognition literature, I implemented a Siamese network for one-shot learning. This was a game-changer for handling new faces with limited examples.
-
 
 ## License
 

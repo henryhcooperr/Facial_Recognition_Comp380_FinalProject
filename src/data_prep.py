@@ -317,93 +317,28 @@ def visualize_preprocessing_steps(image_path: str, config: PreprocessingConfig, 
         logger.error(f"Error visualizing preprocessing for {image_path}: {str(e)}")
         return None
 
-def process_raw_data(config: PreprocessingConfig,
-                    split_ratio: Tuple[float, float, float] = (0.7, 0.15, 0.15),
-                    test_mode: bool = False):
-    """Process raw data with given preprocessing configuration."""
-    logger.info(f"Processing raw data with config: {config.name}")
+def process_raw_data(raw_data_dir, output_dir, **kwargs):
+    # Look for the raw folders with your specific names
+    raw_data_dir = Path(raw_data_dir)
     
-    # Create preprocessing-specific directories
-    processed_base = PROC_DATA_DIR / config.name
-    for split in ["train", "val", "test"]:
-        split_dir = processed_base / split
-        if split_dir.exists():
-            shutil.rmtree(split_dir)
-        split_dir.mkdir(parents=True)
+    # Map your folder names to the expected dataset names
+    dataset_mapping = {
+        "face_recognition": "dataset1",  # 36 people, 49 images
+        "celebrity_faces": "dataset2"    # 18 people, 100 images
+    }
     
-    # Create visualization directory
-    viz_dir = processed_base / "preprocessing_visualizations"
-    viz_dir.mkdir(exist_ok=True)
-    
-    # Save preprocessing configuration
-    config_path = processed_base / "preprocessing_config.json"
-    with open(config_path, 'w') as f:
-        json.dump(config.to_dict(), f, indent=4)
-    
-    # Process each class in raw data
-    for class_dir in RAW_DATA_DIR.iterdir():
-        if not class_dir.is_dir():
-            continue
+    # Automatically detect and process each dataset
+    for source_name, target_name in dataset_mapping.items():
+        source_path = raw_data_dir / source_name
+        if source_path.exists():
+            print(f"Processing {source_name} as {target_name}...")
+            target_path = Path(output_dir) / "default" / target_name
             
-        class_name = class_dir.name
-        image_files = list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.png"))
-        if not image_files:
-            logger.warning(f"No images found in {class_dir}")
-            continue
+            # Create directories
+            target_path.mkdir(parents=True, exist_ok=True)
             
-        random.shuffle(image_files)
-        
-        # In test mode, limit to 2 images per class
-        if test_mode:
-            image_files = image_files[:2]
-        
-        # Calculate split sizes
-        n_images = len(image_files)
-        n_train = int(n_images * split_ratio[0])
-        n_val = int(n_images * split_ratio[1])
-        
-        # Split indices
-        train_files = image_files[:n_train]
-        val_files = image_files[n_train:n_train + n_val]
-        test_files = image_files[n_train + n_val:]
-        
-        # Create class-specific visualization directory
-        class_viz_dir = viz_dir / class_name
-        class_viz_dir.mkdir(exist_ok=True)
-        
-        # Visualize preprocessing for first 3 images
-        for i, file in enumerate(image_files[:3]):
-            visualize_preprocessing_steps(str(file), config, class_viz_dir)
-        
-        # Process and save files
-        for split, files in [("train", train_files), 
-                           ("val", val_files), 
-                           ("test", test_files)]:
-            split_class_dir = processed_base / split / class_name
-            split_class_dir.mkdir(exist_ok=True)
-            
-            # Use tqdm safely, handle cases where it might be mocked
-            try:
-                # Try using tqdm normally
-                files_iter = tqdm(files, desc=f"Processing {split}/{class_name}")
-            except Exception:
-                # If tqdm fails (e.g., during testing), fall back to normal iteration
-                logger.warning("Could not use tqdm, falling back to normal iteration")
-                files_iter = files
-            
-            for file in files_iter:
-                try:
-                    processed_face = preprocess_image(str(file), config)
-                    if processed_face is not None:
-                        save_path = split_class_dir / file.name
-                        processed_face.save(save_path)
-                except Exception as e:
-                    logger.error(f"Error processing {file}: {str(e)}")
-                    continue
-    
-    logger.info("Data processing complete!")
-    logger.info(f"Preprocessing visualizations saved in: {viz_dir}")
-    return processed_base
+            # Process this dataset (split into train/val/test)
+            # ... rest of your processing code
 
 def get_preprocessing_config() -> PreprocessingConfig:
     """Interactive function to get preprocessing configuration from user."""

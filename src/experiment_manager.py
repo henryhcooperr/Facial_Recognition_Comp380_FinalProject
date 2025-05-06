@@ -60,6 +60,12 @@ class ExperimentConfig:
         """Evaluation modes for model evaluation."""
         STANDARD = "standard"  # Standard accuracy, precision, recall, F1
         ENHANCED = "enhanced"  # Standard + per-class metrics, calibration, resource usage
+    
+    class TrackerType(Enum):
+        """Experiment tracking systems."""
+        NONE = "none"
+        MLFLOW = "mlflow"
+        WANDB = "wandb"
         
     def __init__(
         self,
@@ -108,7 +114,19 @@ class ExperimentConfig:
         save_raw_predictions: bool = True,
         max_misclassified_examples: int = 10,
         model_complexity_analysis: bool = True,
-        class_difficulty_metric: str = "f1"
+        class_difficulty_metric: str = "f1",
+        
+        # Experiment tracking options (new)
+        tracker_type: Union[TrackerType, str] = TrackerType.NONE,
+        tracking_uri: Optional[str] = None,
+        wandb_project: str = "face-recognition",
+        wandb_entity: Optional[str] = None,
+        track_metrics: bool = True,
+        track_params: bool = True,
+        track_artifacts: bool = True,
+        track_models: bool = True,
+        register_best_model: bool = False,
+        tracking_tags: Optional[Dict[str, str]] = None
     ):
         """Initialize experiment configuration.
         
@@ -159,6 +177,18 @@ class ExperimentConfig:
             max_misclassified_examples: Max number of examples to store
             model_complexity_analysis: Whether to analyze model complexity
             class_difficulty_metric: Metric to use for class difficulty ranking
+            
+            # Experiment tracking options
+            tracker_type: Type of experiment tracker to use 
+            tracking_uri: URI for tracking server (if applicable)
+            wandb_project: Project name for W&B tracking
+            wandb_entity: Entity name for W&B tracking (username or team)
+            track_metrics: Whether to track metrics
+            track_params: Whether to track parameters
+            track_artifacts: Whether to track artifacts (plots, etc.)
+            track_models: Whether to track models
+            register_best_model: Whether to register the best model in the registry
+            tracking_tags: Additional tags to associate with tracking runs
         """
         # Set basic configuration parameters
         self.experiment_name = experiment_name
@@ -257,6 +287,26 @@ class ExperimentConfig:
         self.max_misclassified_examples = max_misclassified_examples
         self.model_complexity_analysis = model_complexity_analysis
         self.class_difficulty_metric = class_difficulty_metric
+        
+        # Experiment tracking options
+        if isinstance(tracker_type, str):
+            try:
+                self.tracker_type = ExperimentConfig.TrackerType(tracker_type)
+            except ValueError:
+                logger.warning(f"Invalid tracker type: {tracker_type}. Using NONE.")
+                self.tracker_type = ExperimentConfig.TrackerType.NONE
+        else:
+            self.tracker_type = tracker_type
+            
+        self.tracking_uri = tracking_uri
+        self.wandb_project = wandb_project
+        self.wandb_entity = wandb_entity
+        self.track_metrics = track_metrics
+        self.track_params = track_params
+        self.track_artifacts = track_artifacts
+        self.track_models = track_models
+        self.register_best_model = register_best_model
+        self.tracking_tags = tracking_tags or {}
     
     def increment_version(self, level='patch'):
         """Increment the configuration version.
@@ -357,7 +407,28 @@ class ExperimentConfig:
             "keep_last_n_checkpoints": self.keep_last_n_checkpoints,
             "keep_best_n_checkpoints": self.keep_best_n_checkpoints,
             "save_checkpoint_metadata": self.save_checkpoint_metadata,
-            "resumable_training": self.resumable_training
+            "resumable_training": self.resumable_training,
+            "evaluation_mode": self.evaluation_mode.value if isinstance(self.evaluation_mode, Enum) else self.evaluation_mode,
+            "per_class_analysis": self.per_class_analysis,
+            "calibration_analysis": self.calibration_analysis, 
+            "resource_monitoring": self.resource_monitoring,
+            "calibration_n_bins": self.calibration_n_bins,
+            "use_temperature_scaling": self.use_temperature_scaling,
+            "confidence_threshold": self.confidence_threshold,
+            "save_raw_predictions": self.save_raw_predictions,
+            "max_misclassified_examples": self.max_misclassified_examples,
+            "model_complexity_analysis": self.model_complexity_analysis,
+            "class_difficulty_metric": self.class_difficulty_metric,
+            "tracker_type": self.tracker_type.value if isinstance(self.tracker_type, Enum) else self.tracker_type,
+            "tracking_uri": self.tracking_uri,
+            "wandb_project": self.wandb_project,
+            "wandb_entity": self.wandb_entity,
+            "track_metrics": self.track_metrics,
+            "track_params": self.track_params,
+            "track_artifacts": self.track_artifacts,
+            "track_models": self.track_models,
+            "register_best_model": self.register_best_model,
+            "tracking_tags": self.tracking_tags
         }
         
         # Add preprocessing config if available
@@ -403,7 +474,28 @@ class ExperimentConfig:
             keep_last_n_checkpoints=config_dict.get("keep_last_n_checkpoints", 5),
             keep_best_n_checkpoints=config_dict.get("keep_best_n_checkpoints", 3),
             save_checkpoint_metadata=config_dict.get("save_checkpoint_metadata", True),
-            resumable_training=config_dict.get("resumable_training", True)
+            resumable_training=config_dict.get("resumable_training", True),
+            evaluation_mode=config_dict.get("evaluation_mode", "standard"),
+            per_class_analysis=config_dict.get("per_class_analysis", True),
+            calibration_analysis=config_dict.get("calibration_analysis", True),
+            resource_monitoring=config_dict.get("resource_monitoring", True),
+            calibration_n_bins=config_dict.get("calibration_n_bins", 10),
+            use_temperature_scaling=config_dict.get("use_temperature_scaling", False),
+            confidence_threshold=config_dict.get("confidence_threshold", 0.5),
+            save_raw_predictions=config_dict.get("save_raw_predictions", True),
+            max_misclassified_examples=config_dict.get("max_misclassified_examples", 10),
+            model_complexity_analysis=config_dict.get("model_complexity_analysis", True),
+            class_difficulty_metric=config_dict.get("class_difficulty_metric", "f1"),
+            tracker_type=config_dict.get("tracker_type", "none"),
+            tracking_uri=config_dict.get("tracking_uri"),
+            wandb_project=config_dict.get("wandb_project", "face-recognition"),
+            wandb_entity=config_dict.get("wandb_entity"),
+            track_metrics=config_dict.get("track_metrics", True),
+            track_params=config_dict.get("track_params", True),
+            track_artifacts=config_dict.get("track_artifacts", True),
+            track_models=config_dict.get("track_models", True),
+            register_best_model=config_dict.get("register_best_model", False),
+            tracking_tags=config_dict.get("tracking_tags", {})
         )
         
         # Set creation timestamp if available
@@ -591,6 +683,10 @@ class ResultsManager:
         self.resource_metrics = {}
         self.experiment_log = []
         
+        # Set up experiment tracking
+        self.tracker = None
+        self.setup_tracking()
+        
         # Handle model_architecture correctly when it's a list
         model_arch = self.config.model_architecture
         model_arch_value = model_arch if isinstance(model_arch, list) else model_arch.value
@@ -603,6 +699,59 @@ class ResultsManager:
             "model_architecture": model_arch_value,
             "timestamp": datetime.datetime.now().isoformat()
         })
+    
+    def setup_tracking(self):
+        """Set up experiment tracking based on configuration."""
+        from .tracking import ExperimentTracker
+        
+        tracker_type = "none"
+        if hasattr(self.config, "tracker_type") and hasattr(self.config.tracker_type, "value"):
+            tracker_type = self.config.tracker_type.value
+        
+        # Initialize the appropriate tracker
+        if tracker_type == "mlflow":
+            # Create MLflow tracker
+            self.tracker = ExperimentTracker.create(
+                "mlflow",
+                tracking_uri=self.config.tracking_uri
+            )
+            # Initialize tracker with experiment name
+            self.tracker.initialize(
+                experiment_name=self.config.experiment_name,
+                tracking_uri=self.config.tracking_uri
+            )
+        elif tracker_type in ("wandb", "weights_and_biases"):
+            # Create W&B tracker
+            self.tracker = ExperimentTracker.create(
+                "wandb",
+                project=self.config.wandb_project,
+                entity=self.config.wandb_entity
+            )
+            # Initialize tracker with experiment name
+            self.tracker.initialize(
+                experiment_name=self.config.wandb_project
+            )
+        else:
+            # Create no-op tracker (does nothing)
+            self.tracker = ExperimentTracker.create("none")
+            self.tracker.initialize(experiment_name=self.config.experiment_name)
+        
+        # Start tracking run
+        run_name = f"{self.config.experiment_name}_{self.config.experiment_id}"
+        self.tracker.start_run(
+            run_name=run_name,
+            tags=self.config.tracking_tags
+        )
+        
+        # Log parameters if configured
+        if self.config.track_params:
+            # Get config as dict and log it
+            config_dict = self.config.to_dict()
+            self.tracker.log_params(config_dict)
+        
+        # Create experiment dashboard
+        from .tracking import ExperimentDashboard
+        self.dashboard = ExperimentDashboard(self.tracker)
     
     def _setup_directories(self):
         """Create directory structure for results."""
@@ -650,6 +799,12 @@ class ResultsManager:
             "metrics": metrics
         })
         
+        # Track metrics if configured
+        if self.tracker and self.config.track_metrics:
+            # Add 'train_' prefix to metrics for clarity
+            train_metrics = {f"train_{k}": v for k, v in metrics.items() if k != 'epoch'}
+            self.tracker.log_metrics(train_metrics, step=epoch)
+        
         # Save metrics to CSV
         self._save_metrics_to_csv(self.train_metrics, "training_metrics.csv")
     
@@ -665,6 +820,12 @@ class ResultsManager:
             "metrics": metrics
         })
         
+        # Track metrics if configured
+        if self.tracker and self.config.track_metrics:
+            # Add 'val_' prefix to metrics for clarity
+            val_metrics = {f"val_{k}": v for k, v in metrics.items() if k not in ['epoch', 'dataset']}
+            self.tracker.log_metrics(val_metrics, step=epoch)
+        
         # Save metrics to CSV
         self._save_metrics_to_csv(self.eval_metrics, "evaluation_metrics.csv")
     
@@ -678,6 +839,12 @@ class ResultsManager:
             "dataset": dataset,
             "metrics": metrics
         })
+        
+        # Track metrics if configured
+        if self.tracker and self.config.track_metrics:
+            # Add 'test_' prefix to metrics for clarity
+            test_metrics = {f"test_{k}": v for k, v in metrics.items() if k != 'dataset'}
+            self.tracker.log_metrics(test_metrics)
         
         # Save metrics to CSV
         self._save_metrics_to_csv(self.test_metrics, "test_metrics.csv")
@@ -699,10 +866,25 @@ class ResultsManager:
             json.dump(enhanced_cm, f, indent=2)
         
         # Create enhanced visualization
+        output_path = self.confusion_dir / f"confusion_matrix_{dataset}.png"
         plot_advanced_confusion_matrix(
             enhanced_cm, 
-            output_path=self.confusion_dir / f"confusion_matrix_{dataset}.png"
+            output_path=output_path
         )
+        
+        # Track confusion matrix if configured
+        if self.tracker and self.config.track_artifacts:
+            # Convert confusion matrix to numpy array
+            cm = np.array(enhanced_cm["matrix"])
+            self.tracker.log_confusion_matrix(
+                cm=cm,
+                class_names=class_names,
+                name=f"confusion_matrix_{dataset}"
+            )
+            
+            # Also log the confusion matrix visualization
+            if self.config.track_artifacts:
+                self.tracker.log_artifact(output_path)
     
     def record_per_class_metrics(self, y_true: List[int], y_pred: List[int], 
                                 y_score: np.ndarray, class_names: List[str], 
@@ -736,24 +918,43 @@ class ResultsManager:
             json.dump(per_class_metrics, f, indent=2)
         
         # Create class difficulty visualization
+        difficulty_path = self.class_analysis_dir / f"class_difficulty_{dataset}.png"
         plot_class_difficulty_analysis(
             per_class_metrics, 
-            output_path=self.class_analysis_dir / f"class_difficulty_{dataset}.png",
+            output_path=difficulty_path,
             metric="f1"  # Use F1 score for difficulty ranking
         )
         
         # Also create visualizations by precision and recall
+        precision_path = self.class_analysis_dir / f"class_difficulty_precision_{dataset}.png"
         plot_class_difficulty_analysis(
             per_class_metrics, 
-            output_path=self.class_analysis_dir / f"class_difficulty_precision_{dataset}.png",
+            output_path=precision_path,
             metric="precision"
         )
         
+        recall_path = self.class_analysis_dir / f"class_difficulty_recall_{dataset}.png"
         plot_class_difficulty_analysis(
             per_class_metrics, 
-            output_path=self.class_analysis_dir / f"class_difficulty_recall_{dataset}.png",
+            output_path=recall_path,
             metric="recall"
         )
+        
+        # Track metrics and visualizations if configured
+        if self.tracker and self.config.track_metrics:
+            # Log per-class metrics to tracker
+            for class_name, metrics in per_class_metrics.items():
+                for metric_name, value in metrics.items():
+                    # Create a composite metric name for each class and metric
+                    metric_key = f"per_class_{dataset}_{class_name}_{metric_name}"
+                    self.tracker.log_metrics({metric_key: value})
+            
+            # Log class difficulty visualizations as artifacts
+            if self.config.track_artifacts:
+                self.tracker.log_artifact(metrics_path, f"per_class_metrics/{dataset}")
+                self.tracker.log_artifact(difficulty_path, f"class_difficulty/{dataset}")
+                self.tracker.log_artifact(precision_path, f"class_difficulty/{dataset}")
+                self.tracker.log_artifact(recall_path, f"class_difficulty/{dataset}")
         
         # Log event
         self.log_event("per_class_metrics_recorded", {
@@ -792,16 +993,56 @@ class ResultsManager:
             json.dump(calibration_data, f, indent=2)
         
         # Create reliability diagram
+        reliability_path = self.calibration_dir / f"reliability_diagram_{dataset}.png"
         plot_reliability_diagram(
             calibration_data,
-            output_path=self.calibration_dir / f"reliability_diagram_{dataset}.png"
+            output_path=reliability_path
         )
         
         # Create confidence histogram
+        histogram_path = self.calibration_dir / f"confidence_histogram_{dataset}.png"
         plot_confidence_histogram(
             np.array(y_true), np.array(y_pred), y_score,
-            output_path=self.calibration_dir / f"confidence_histogram_{dataset}.png"
+            output_path=histogram_path
         )
+        
+        # Track metrics and visualizations if configured
+        if self.tracker and self.config.track_metrics:
+            # Log calibration metrics
+            cal_metrics = {
+                f"calibration_{dataset}_ece": calibration_data["expected_calibration_error"],
+                f"calibration_{dataset}_mce": calibration_data["maximum_calibration_error"]
+            }
+            self.tracker.log_metrics(cal_metrics)
+            
+            # Log calibration visualizations
+            if self.config.track_artifacts:
+                self.tracker.log_artifact(metrics_path, f"calibration_metrics/{dataset}")
+                self.tracker.log_artifact(reliability_path, f"calibration/{dataset}")
+                self.tracker.log_artifact(histogram_path, f"calibration/{dataset}")
+                
+                # Create and log reliability diagram as a figure
+                import matplotlib.pyplot as plt
+                fig = plt.figure(figsize=(10, 8))
+                bin_accuracies = np.array(calibration_data["bin_accuracies"])
+                bin_confidences = np.array(calibration_data["bin_confidences"])
+                bin_counts = np.array(calibration_data["bin_counts"])
+                bin_edges = np.linspace(0, 1, calibration_data["n_bins"] + 1)
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                
+                plt.bar(bin_centers, bin_accuracies, width=1/calibration_data["n_bins"], 
+                       alpha=0.3, edgecolor='black', label='Accuracy')
+                plt.plot(bin_centers, bin_confidences, 'ro-', label='Average Confidence')
+                plt.plot([0, 1], [0, 1], 'k--', label='Perfect Calibration')
+                plt.xlim([0, 1])
+                plt.ylim([0, 1])
+                plt.xlabel('Confidence')
+                plt.ylabel('Accuracy')
+                plt.title(f'Reliability Diagram - {dataset.capitalize()} Set')
+                plt.legend(loc='lower right')
+                
+                self.tracker.log_figure(fig, f"reliability_diagram_{dataset}.png")
+                plt.close(fig)
         
         # Log event
         self.log_event("calibration_metrics_recorded", {
@@ -828,10 +1069,33 @@ class ResultsManager:
             json.dump(resource_data, f, indent=2)
         
         # Create resource usage plot
+        resource_path = self.resource_dir / f"resource_usage_{phase}.png"
         plot_resource_usage(
             resource_data,
-            output_path=self.resource_dir / f"resource_usage_{phase}.png"
+            output_path=resource_path
         )
+        
+        # Track metrics and visualizations if configured
+        if self.tracker and self.config.track_metrics:
+            # Log key resource metrics
+            resource_metrics = {
+                f"resource_{phase}_duration": resource_data["duration"],
+                f"resource_{phase}_mean_cpu": resource_data["cpu_percent"]["mean"],
+                f"resource_{phase}_max_cpu": resource_data["cpu_percent"]["max"],
+                f"resource_{phase}_mean_memory": resource_data["memory_mb"]["mean"],
+                f"resource_{phase}_max_memory": resource_data["memory_mb"]["max"]
+            }
+            
+            # Add additional metrics if available
+            if "samples_per_second" in resource_data:
+                resource_metrics[f"resource_{phase}_samples_per_second"] = resource_data["samples_per_second"]
+            
+            self.tracker.log_metrics(resource_metrics)
+            
+            # Log resource visualizations
+            if self.config.track_artifacts:
+                self.tracker.log_artifact(metrics_path, f"resource_metrics/{phase}")
+                self.tracker.log_artifact(resource_path, f"resource_usage/{phase}")
         
         # Log event
         self.log_event("resource_metrics_recorded", {
@@ -875,6 +1139,24 @@ class ResultsManager:
         metrics_path = self.metrics_dir / "model_complexity.json"
         with open(metrics_path, 'w') as f:
             json.dump(complexity_metrics, f, indent=2)
+        
+        # Track metrics if configured
+        if self.tracker and self.config.track_metrics:
+            # Log model complexity metrics
+            model_metrics = {
+                "model_total_parameters": param_counts["total_parameters"],
+                "model_trainable_parameters": param_counts["trainable_parameters"]
+            }
+            
+            # Add FLOP estimates if available
+            if isinstance(flop_estimates, dict) and "total_flops" in flop_estimates:
+                model_metrics["model_total_flops"] = flop_estimates["total_flops"]
+                
+            self.tracker.log_metrics(model_metrics)
+            
+            # Log complexity details as artifact
+            if self.config.track_artifacts:
+                self.tracker.log_artifact(metrics_path, "model_complexity")
         
         # Log event
         self.log_event("model_complexity_recorded", {
@@ -933,6 +1215,18 @@ class ResultsManager:
         predictions_path = self.predictions_dir / f"predictions_{dataset}.csv"
         df.to_csv(predictions_path, index=False)
         
+        # Track raw predictions if configured
+        if self.tracker and self.config.track_artifacts:
+            self.tracker.log_artifact(predictions_path, f"predictions/{dataset}")
+            
+            # Find and log misclassified examples
+            misclassified = df[~df["correct"]].sort_values("confidence", ascending=False)
+            if not misclassified.empty:
+                # Save misclassified examples to CSV
+                misclassified_path = self.predictions_dir / f"misclassified_{dataset}.csv"
+                misclassified.head(self.config.max_misclassified_examples).to_csv(misclassified_path, index=False)
+                self.tracker.log_artifact(misclassified_path, f"predictions/{dataset}")
+        
         # Log event
         self.log_event("raw_predictions_saved", {
             "dataset": dataset,
@@ -955,8 +1249,37 @@ class ResultsManager:
             json.dump(curves_data, f, indent=2)
         
         # Create visualization
+        output_path = str(self.plots_dir / f"learning_curves_{self.config.experiment_id}.png")
         plot_learning_curves(train_losses, val_losses, accuracies, 
                           str(self.plots_dir), self.config.experiment_id)
+        
+        # Track learning curves if configured
+        if self.tracker and self.config.track_artifacts:
+            # Log the learning curves figure
+            import matplotlib.pyplot as plt
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
+            
+            # Plot losses
+            epochs = range(1, len(train_losses) + 1)
+            ax1.plot(epochs, train_losses, 'b-', label='Training Loss')
+            ax1.plot(epochs, val_losses, 'r-', label='Validation Loss')
+            ax1.set_title('Training and Validation Loss')
+            ax1.set_xlabel('Epochs')
+            ax1.set_ylabel('Loss')
+            ax1.legend()
+            
+            # Plot accuracy
+            ax2.plot(epochs, accuracies, 'g-', label='Validation Accuracy')
+            ax2.set_title('Validation Accuracy')
+            ax2.set_xlabel('Epochs')
+            ax2.set_ylabel('Accuracy (%)')
+            ax2.legend()
+            
+            plt.tight_layout()
+            
+            # Log the figure
+            self.tracker.log_figure(fig, "learning_curves.png")
+            plt.close(fig)
     
     def log_event(self, event_type: str, data: Dict[str, Any]):
         """Log an experiment event with timestamp."""
@@ -1038,6 +1361,21 @@ class ResultsManager:
         if is_best:
             # Save model state dict
             torch.save(model.state_dict(), best_model_path)
+            
+            # Track model if configured
+            if self.tracker and self.config.track_models:
+                model_name = f"{self.config.model_architecture.value if hasattr(self.config.model_architecture, 'value') else self.config.model_architecture}"
+                self.tracker.log_model(
+                    model=model,
+                    model_name=model_name,
+                    metadata={
+                        "is_best": True,
+                        "epoch": epoch,
+                        "validation_metrics": validation_metrics,
+                        "experiment_id": self.config.experiment_id,
+                        "register": self.config.register_best_model
+                    }
+                )
             
             # If full checkpoint for best model is requested
             if self.config.save_best_checkpoint:
@@ -1173,6 +1511,23 @@ class ResultsManager:
         self.log_event("experiment_completed", {
             "summary": summary
         })
+        
+        # Track summary if configured
+        if self.tracker and self.config.track_artifacts:
+            # Log summary as artifact
+            self.tracker.log_artifact(summary_path)
+            
+            # If URL to dashboard is available, add it to the summary
+            dashboard_url = self.tracker.get_dashboard_url()
+            if dashboard_url:
+                summary["dashboard_url"] = dashboard_url
+                # Update the summary file
+                with open(summary_path, 'w') as f:
+                    json.dump(summary, f, indent=2)
+        
+        # End tracking run
+        if self.tracker:
+            self.tracker.end_run()
         
         return summary
     
@@ -1332,12 +1687,17 @@ class ExperimentManager:
                 
                 # Plot and save LR schedule if a scheduler is used
                 if scheduler:
+                    lr_schedule_path = results_manager.plots_dir / "lr_schedule.png"
                     plot_lr_schedule(
                         scheduler=scheduler,
                         optimizer=optimizer,
                         num_epochs=config.epochs,
-                        save_path=results_manager.plots_dir / "lr_schedule.png"
+                        save_path=lr_schedule_path
                     )
+                    
+                    # Track the LR schedule visualization if configured
+                    if hasattr(config, 'track_artifacts') and config.track_artifacts and results_manager.tracker:
+                        results_manager.tracker.log_artifact(lr_schedule_path)
             
             # Set up early stopping if requested
             early_stopping = None

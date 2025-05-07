@@ -290,8 +290,62 @@ dashboard.filter_runs_by_metrics({
 │   └── visualize.py        # Visualization functions
 ├── tests/                  # Unit tests
 ├── requirements.txt        # Required packages
-└── run.py                  # Main entry point
+├── run.py                  # Main entry point
+└── rerun_experiment.py     # Script for rerunning specific experiments
 ```
+
+## Experiment Rerun Capabilities
+
+The system now includes a powerful experiment rerun feature that allows you to selectively rerun specific parts of your experiments without starting from scratch. This is especially useful when:
+
+- One model (like Siamese) failed while others succeeded
+- You need to rerun cross-validation with different parameters
+- You want to try a different hyperparameter optimization approach
+- You fixed a bug and only want to rerun affected components
+
+### Using the Rerun Script
+
+The easiest way to use this feature is with the interactive prompt:
+
+```
+python rerun_experiment.py
+```
+
+This will guide you through:
+1. Selecting an existing experiment to rerun
+2. Choosing which models to rerun (e.g., "siamese", "arcface", or "all")
+3. Deciding whether to rerun cross-validation and hyperparameter optimization
+4. Starting fresh or resuming from checkpoints
+5. Confirming which directories to delete for clean reruns
+
+### Command Line Options
+
+For automated reruns, you can use the command line arguments:
+
+```
+# Rerun just the siamese model with a fresh start (no checkpoint resumption)
+python rerun_experiment.py --mode rerun --experiment-id comprehensive_experiment_20250506_182408 --rerun-models siamese --fresh-start
+
+# Rerun multiple models with auto-confirmation (no deletion prompts)
+python rerun_experiment.py --mode rerun --experiment-id your_experiment_id --rerun-models cnn attention --auto-confirm
+
+# Rerun cross-validation but keep existing model results
+python rerun_experiment.py --mode rerun --experiment-id your_experiment_id --rerun-cv
+```
+
+### Rerun Features
+
+The rerun functionality includes several advanced features:
+
+- **Selective Model Rerunning**: Only rerun specific model architectures
+- **Cross-Validation Control**: Rerun or skip cross-validation
+- **Hyperparameter Optimization Control**: Rerun or skip hyperopt
+- **Fresh Start Option**: Disable checkpoint resumption for clean runs
+- **Smart Directory Cleanup**: Intelligently finds and removes old data
+- **Safe Deletion Handling**: Avoids errors when deleting nested directories
+- **Auto-Confirm Mode**: Enables unattended rerunning in scripts
+
+When rerunning, the script maintains the original experiment configuration but allows you to restart specific components from scratch.
 
 ## Training Enhancements
 

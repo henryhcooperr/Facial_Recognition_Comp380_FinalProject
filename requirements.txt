@@ -22,4 +22,5 @@ unittest-mock>=1.3.0
 wandb==0.15.8
 mlflow>=2.4.0
 ray[tune]>=2.0.0
-seaborn>=0.12.0  # For additional visualizations 
+seaborn>=0.12.0  # For additional visualizations
+psutil>=5.9.0     # For system monitoring and disk space checking 

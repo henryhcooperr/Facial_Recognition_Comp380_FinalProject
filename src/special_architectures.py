@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
+import mlflow
 
 from .face_models import get_model, get_criterion
 from .base_config import logger
@@ -312,14 +313,14 @@ def train_siamese_network(model, train_dataset, val_dataset, config, results_man
         if early_stopping:
             # Use appropriate metric for early stopping
             if hasattr(config, 'early_stopping_metric') and config.early_stopping_metric == "loss":
-                improvement = early_stopping(epoch_val_loss)
+                early_stop = early_stopping(epoch_val_loss)
             else:  # Use accuracy
                 # Negate accuracy for 'min' mode
                 es_value = -accuracy if early_stopping.mode == 'min' else accuracy
-                improvement = early_stopping(es_value)
+                early_stop = early_stopping(es_value)
             
             # Check if training should be stopped
-            if early_stopping.early_stop:
+            if early_stop:
                 logger.info(f"Early stopping triggered at epoch {epoch}")
                 # Save early stopping trace to a file
                 with open(Path(config.results_dir) / "logs" / "early_stopping_trace.json", 'w') as f:
@@ -341,6 +342,14 @@ def train_siamese_network(model, train_dataset, val_dataset, config, results_man
     # Test the best model
     logger.info("Testing the best model...")
     model.load_state_dict(torch.load(Path(config.results_dir) / "checkpoints" / "best_model.pth"))
+    
+    # End MLflow run if it's active to avoid leaving dangling runs
+    try:
+        if mlflow.active_run():
+            logger.info(f"Ended MLflow run: {results_manager.tracker.run_id}")
+            mlflow.end_run()
+    except Exception as e:
+        logger.error(f"Error ending MLflow run: {str(e)}")
     
     # Here we'd run evaluation on the test set, but for now return the results
     return {
@@ -470,61 +479,121 @@ def evaluate_siamese_network(model, test_dataset, config, results_manager):
     return test_metrics
 
 class ArcFaceTrainer:
-    """
-    Specialized trainer for ArcFace networks.
-    """
+    """Trainer for ArcFace-based models."""
     
-    @staticmethod
-    def train_arcface_network(model, train_dataset, val_dataset, test_dataset, config, results_manager):
+    def __init__(self):
+        """Initialize the ArcFace trainer."""
+        self.model = None
+        self.train_dataset = None
+        self.val_dataset = None
+        self.config = None
+        self.results_manager = None
+    
+    def train(self):
+        """Train the ArcFace model."""
+        if not all([self.model, self.train_dataset, self.val_dataset, self.config, self.results_manager]):
+            raise ValueError("ArcFaceTrainer not fully initialized. Set model, datasets, config, and results_manager attributes.")
+        
+        # Call the existing training method
+        return self.train_arcface_network()
+    
+    def test(self, test_dataset):
+        """Test the ArcFace model on the provided test dataset."""
+        from torch.utils.data import DataLoader
+        import torch
+        
+        # Create test dataloader with appropriate transforms
+        test_dataloader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Test the model using the existing test_model function
+        from .special_architectures import test_model
+        test_result = test_model(self.model, test_dataloader, device)
+        
+        # Record test metrics
+        self.results_manager.record_test_metrics(test_result)
+        
+        # Generate visualizations
+        try:
+            # Get predictions and true labels
+            y_true = test_result.get('y_true', [])
+            y_pred = test_result.get('y_pred', [])
+            y_score = test_result.get('y_score', [])
+            
+            # Convert to numpy arrays
+            import numpy as np
+            y_true = np.array(y_true)
+            y_pred = np.array(y_pred)
+            y_score = np.array(y_score)
+            
+            # Make sure we have data to create visualizations
+            if len(y_true) > 0 and len(y_pred) > 0 and len(y_score) > 0:
+                # Get class names
+                classes = test_dataset.classes if hasattr(test_dataset, 'classes') else None
+                
+                # Generate confusion matrix visualization
+                self.results_manager.record_confusion_matrix(y_true, y_pred, classes)
+                
+                # Generate per-class metrics and visualizations
+                if hasattr(self.config, 'per_class_analysis') and self.config.per_class_analysis:
+                    self.results_manager.record_per_class_metrics(y_true, y_pred, y_score, classes)
+                
+                # Generate calibration visualizations
+                if hasattr(self.config, 'calibration_analysis') and self.config.calibration_analysis:
+                    self.results_manager.record_calibration_metrics(y_true, y_pred, y_score)
+                    
+                print(f"Generated visualizations for ArcFace model")
+        except Exception as viz_error:
+            print(f"Error generating visualizations for ArcFace model: {str(viz_error)}")
+        
+        return test_result
+
+    def train_arcface_network(self):
         """
         Custom training routine for ArcFace networks.
         
-        Args:
-            model: The ArcFace network model
-            train_dataset: Training dataset
-            val_dataset: Validation dataset
-            test_dataset: Test dataset
-            config: Experiment configuration
-            results_manager: Results manager for logging metrics
-            
         Returns:
-            Dict: Training and testing results
+            Dict: Training results
         """
+        import torch
+        import torch.optim as optim
+        import torch.nn.functional as F
+        from pathlib import Path
+        import time
+        import numpy as np
+        from torch.utils.data import DataLoader
+        
+        # Setup device
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model = model.to(device)
+        self.model = self.model.to(device)
         
         # Create data loaders
         train_loader = DataLoader(
-            train_dataset, 
-            batch_size=config.batch_size, 
+            self.train_dataset, 
+            batch_size=self.config.batch_size, 
             shuffle=True, 
             num_workers=0
         )
         val_loader = DataLoader(
-            val_dataset, 
-            batch_size=config.batch_size, 
-            shuffle=False, 
-            num_workers=0
-        )
-        test_loader = DataLoader(
-            test_dataset, 
-            batch_size=config.batch_size, 
+            self.val_dataset, 
+            batch_size=self.config.batch_size, 
             shuffle=False, 
             num_workers=0
         )
         
         # Get criterion
+        from .face_models import get_criterion
         criterion = get_criterion('arcface')
         
         # Set up optimizer
-        optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
+        optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
         
         # Set up learning rate scheduler if requested
         scheduler = None
-        if hasattr(config, 'lr_scheduler_type') and config.lr_scheduler_type != 'none':
+        if hasattr(self.config, 'lr_scheduler_type') and self.config.lr_scheduler_type != 'none':
             from .training_utils import get_scheduler
-            scheduler_type = config.lr_scheduler_type
-            scheduler_params = config.lr_scheduler_params or {}
+            scheduler_type = self.config.lr_scheduler_type
+            scheduler_params = self.config.lr_scheduler_params or {}
             
             scheduler = get_scheduler(
                 scheduler_type=scheduler_type,
@@ -534,15 +603,15 @@ class ArcFaceTrainer:
         
         # Set up early stopping if requested
         early_stopping = None
-        if hasattr(config, 'use_early_stopping') and config.use_early_stopping:
+        if hasattr(self.config, 'use_early_stopping') and self.config.use_early_stopping:
             from .training_utils import EarlyStopping
             early_stopping = EarlyStopping(
-                patience=config.early_stopping_patience,
-                min_delta=config.early_stopping_min_delta,
-                mode=config.early_stopping_mode
+                patience=self.config.early_stopping_patience,
+                min_delta=self.config.early_stopping_min_delta,
+                mode=self.config.early_stopping_mode
             )
         
-        # Training loop
+        # Training loop variables
         best_val_accuracy = 0
         best_val_loss = float('inf')
         train_losses = []
@@ -552,20 +621,20 @@ class ArcFaceTrainer:
         start_epoch = 1
         
         # Check if training should be resumed from checkpoint
-        if hasattr(config, 'resumable_training') and config.resumable_training:
-            checkpoints_dir = Path(config.results_dir) / "checkpoints"
+        if hasattr(self.config, 'resumable_training') and self.config.resumable_training:
+            checkpoints_dir = Path(self.config.results_dir) / "checkpoints"
             if checkpoints_dir.exists():
                 # Fix: correctly use list() on the result of glob()
-                checkpoint_files = list((Path(config.results_dir) / "checkpoints").glob("checkpoint_epoch_*.pth"))
+                checkpoint_files = list((Path(self.config.results_dir) / "checkpoints").glob("checkpoint_epoch_*.pth"))
                 if checkpoint_files:
                     # Sort by epoch number
                     checkpoint_files.sort(key=lambda x: int(str(x).split('_')[-1].split('.')[0]))
                     latest_checkpoint = checkpoint_files[-1]
                     
-                    logger.info(f"Resuming training from checkpoint: {latest_checkpoint}")
+                    print(f"Resuming training from checkpoint: {latest_checkpoint}")
                     checkpoint = torch.load(latest_checkpoint, map_location=device)
                     
-                    model.load_state_dict(checkpoint['model_state_dict'])
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
                     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                     
                     # Restore scheduler state if available
@@ -574,14 +643,14 @@ class ArcFaceTrainer:
                     
                     # Set start epoch
                     start_epoch = checkpoint['epoch'] + 1
-                    logger.info(f"Starting from epoch {start_epoch}")
+                    print(f"Starting from epoch {start_epoch}")
         
-        import time
+        # Start training
         training_start_time = time.time()
         
-        for epoch in range(start_epoch, config.epochs + 1):
+        for epoch in range(start_epoch, self.config.epochs + 1):
             # Training phase
-            model.train()
+            self.model.train()
             running_loss = 0.0
             
             epoch_start_time = time.time()
@@ -593,18 +662,19 @@ class ArcFaceTrainer:
                 optimizer.zero_grad()
                 
                 # Forward pass - ArcFace requires labels during training
-                outputs = model(inputs, labels)
+                outputs = self.model(inputs, labels)
                 loss = criterion(outputs, labels)
                 
                 # Backward pass
                 loss.backward()
                 
                 # Apply gradient clipping if enabled
-                if hasattr(config, 'use_gradient_clipping') and config.use_gradient_clipping:
+                if hasattr(self.config, 'use_gradient_clipping') and self.config.use_gradient_clipping:
+                    from .training_utils import apply_gradient_clipping
                     apply_gradient_clipping(
-                        model=model,
-                        max_norm=config.gradient_clipping_max_norm,
-                        adaptive=config.gradient_clipping_adaptive,
+                        model=self.model,
+                        max_norm=self.config.gradient_clipping_max_norm,
+                        adaptive=self.config.gradient_clipping_adaptive,
                         model_type='arcface'
                     )
                 
@@ -617,13 +687,13 @@ class ArcFaceTrainer:
             train_losses.append(epoch_loss)
             
             # Record training metrics
-            results_manager.record_training_metrics(epoch, {
+            self.results_manager.record_training_metrics(epoch, {
                 "loss": epoch_loss,
                 "epoch_time": time.time() - epoch_start_time
             })
             
             # Validation phase
-            model.eval()
+            self.model.eval()
             val_loss = 0.0
             correct = 0
             total = 0
@@ -636,14 +706,14 @@ class ArcFaceTrainer:
                     inputs, labels = inputs.to(device), labels.to(device)
                     
                     # Get embeddings for evaluation
-                    embeddings = model(inputs)
+                    embeddings = self.model(inputs)
                     val_embeddings.append(embeddings)
                     val_labels_list.append(labels)
                     
                     # Calculate similarity for classification
                     logits = F.linear(
                         F.normalize(embeddings), 
-                        F.normalize(model.arcface.weight)
+                        F.normalize(self.model.arcface.weight)
                     )
                     loss = criterion(logits, labels)
                     
@@ -664,18 +734,18 @@ class ArcFaceTrainer:
                 "loss": epoch_val_loss,
                 "accuracy": accuracy
             }
-            results_manager.record_evaluation_metrics(epoch, val_metrics)
+            self.results_manager.record_evaluation_metrics(epoch, val_metrics)
             
             # Step learning rate scheduler if it's a validation-based scheduler
             if scheduler:
                 if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    metric_value = epoch_val_loss if hasattr(config, 'early_stopping_metric') and config.early_stopping_metric == "loss" else -accuracy
+                    metric_value = epoch_val_loss if hasattr(self.config, 'early_stopping_metric') and self.config.early_stopping_metric == "loss" else -accuracy
                     scheduler.step(metric_value)
             
             # Save checkpoint if this is the best model
             is_best = False
-            if hasattr(config, 'early_stopping_mode'):
-                if config.early_stopping_mode == 'max':
+            if hasattr(self.config, 'early_stopping_mode'):
+                if self.config.early_stopping_mode == 'max':
                     # For metrics like accuracy where higher is better
                     is_best = accuracy > best_val_accuracy
                     if is_best:
@@ -692,9 +762,9 @@ class ArcFaceTrainer:
                     best_val_accuracy = accuracy
             
             # Save checkpoint with appropriate frequency
-            if hasattr(config, 'checkpoint_frequency') and (epoch % config.checkpoint_frequency == 0 or is_best):
-                results_manager.save_model_checkpoint(
-                    model=model, 
+            if hasattr(self.config, 'checkpoint_frequency') and (epoch % self.config.checkpoint_frequency == 0 or is_best):
+                self.results_manager.save_model_checkpoint(
+                    model=self.model, 
                     optimizer=optimizer, 
                     epoch=epoch, 
                     is_best=is_best,
@@ -703,12 +773,12 @@ class ArcFaceTrainer:
                 )
             
             # Log progress
-            logger.info(f'Epoch {epoch}/{config.epochs}, '
-                      f'Train Loss: {epoch_loss:.4f}, '
-                      f'Val Loss: {epoch_val_loss:.4f}, '
-                      f'Accuracy: {accuracy:.2f}%, '
-                      f'LR: {optimizer.param_groups[0]["lr"]:.6f}, '
-                      f'Time: {time.time() - epoch_start_time:.2f}s')
+            print(f'Epoch {epoch}/{self.config.epochs}, '
+                  f'Train Loss: {epoch_loss:.4f}, '
+                  f'Val Loss: {epoch_val_loss:.4f}, '
+                  f'Accuracy: {accuracy:.2f}%, '
+                  f'LR: {optimizer.param_groups[0]["lr"]:.6f}, '
+                  f'Time: {time.time() - epoch_start_time:.2f}s')
             
             # Step learning rate scheduler if it's an epoch-based scheduler
             if scheduler and not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -717,18 +787,18 @@ class ArcFaceTrainer:
             # Check early stopping if enabled
             if early_stopping:
                 # Use appropriate metric for early stopping
-                if hasattr(config, 'early_stopping_metric') and config.early_stopping_metric == "loss":
-                    improvement = early_stopping(epoch_val_loss)
+                if hasattr(self.config, 'early_stopping_metric') and self.config.early_stopping_metric == "loss":
+                    early_stop = early_stopping(epoch_val_loss)
                 else:  # Use accuracy
                     # Negate accuracy for 'min' mode
                     es_value = -accuracy if early_stopping.mode == 'min' else accuracy
-                    improvement = early_stopping(es_value)
+                    early_stop = early_stopping(es_value)
                 
                 # Check if training should be stopped
-                if early_stopping.early_stop:
-                    logger.info(f"Early stopping triggered at epoch {epoch}")
+                if early_stop:
+                    print(f"Early stopping triggered at epoch {epoch}")
                     # Save early stopping trace to a file
-                    with open(Path(config.results_dir) / "logs" / "early_stopping_trace.json", 'w') as f:
+                    with open(Path(self.config.results_dir) / "logs" / "early_stopping_trace.json", 'w') as f:
                         import json
                         json.dump({
                             "trace": early_stopping.trace,
@@ -739,159 +809,110 @@ class ArcFaceTrainer:
                     break
         
         total_training_time = time.time() - training_start_time
-        logger.info(f"Training completed in {total_training_time:.2f}s")
+        print(f"Training completed in {total_training_time:.2f}s")
         
         # Record learning curves
-        results_manager.record_learning_curves(train_losses, val_losses, val_accuracies)
-        
-        # Test the best model
-        logger.info("Testing the best model...")
-        model.load_state_dict(torch.load(Path(config.results_dir) / "checkpoints" / "best_model.pth"))
-        model.eval()
-        
-        # Perform evaluation on test set
-        test_loss = 0.0
-        correct = 0
-        total = 0
-        
-        all_embeddings = []
-        all_labels = []
-        all_preds = []
-        all_probs = []
-        
-        inference_start_time = time.time()
-        
-        with torch.no_grad():
-            for batch_idx, (inputs, labels) in enumerate(test_loader):
-                inputs, labels = inputs.to(device), labels.to(device)
-                
-                batch_start_time = time.time()
-                
-                # Get embeddings for evaluation
-                embeddings = model(inputs)
-                
-                # Calculate similarity for classification
-                logits = F.linear(
-                    F.normalize(embeddings), 
-                    F.normalize(model.arcface.weight)
-                )
-                
-                # Calculate softmax probabilities
-                probs = F.softmax(logits, dim=1)
-                
-                loss = criterion(logits, labels)
-                
-                _, preds = torch.max(logits, 1)
-                correct += (preds == labels).sum().item()
-                total += labels.size(0)
-                
-                test_loss += loss.item()
-                
-                # Store predictions
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
-                
-                # Log batch time for first batch (typically includes warm-up overhead)
-                if batch_idx == 0:
-                    logger.info(f"Batch {batch_idx} completed in {time.time() - batch_start_time:.2f}s")
-        
-        inference_time = time.time() - inference_start_time
-        
-        # Calculate metrics
-        test_loss /= len(test_loader)
-        accuracy = 100 * correct / total
-        
-        # Calculate precision, recall, F1 score
-        from sklearn.metrics import precision_score, recall_score, f1_score
-        
-        all_labels = np.array(all_labels)
-        all_preds = np.array(all_preds)
-        all_probs = np.array(all_probs)
-        
-        precision = precision_score(all_labels, all_preds, average='weighted', zero_division=0)
-        recall = recall_score(all_labels, all_preds, average='weighted', zero_division=0)
-        f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
-        
-        # Create test metrics dictionary
-        test_metrics = {
-            "accuracy": accuracy,
-            "loss": test_loss,
-            "precision": precision,
-            "recall": recall,
-            "f1_score": f1,
-            "inference_time_total": inference_time,
-            "inference_time_per_sample": inference_time / total,
-            "inference_samples_per_second": total / inference_time
-        }
-        
-        # Record test metrics
-        results_manager.record_test_metrics(test_metrics)
-        
-        # Record additional metrics if enhanced evaluation is enabled
-        if hasattr(config, 'evaluation_mode') and config.evaluation_mode == 'enhanced':
-            # Get class names
-            class_names = test_dataset.classes
-            
-            # Record confusion matrix
-            results_manager.record_confusion_matrix(all_labels, all_preds, class_names)
-            
-            # Record per-class metrics
-            results_manager.record_per_class_metrics(all_labels, all_preds, all_probs, class_names)
-            
-            # Record calibration metrics
-            results_manager.record_calibration_metrics(all_labels, all_preds, all_probs)
-            
-            # Save raw predictions
-            results_manager.save_raw_predictions(all_labels, all_preds, all_probs, class_names)
+        self.results_manager.record_learning_curves(train_losses, val_losses, val_accuracies)
         
         # Return training summary
         return {
             "training_time": total_training_time,
             "epochs": epoch - start_epoch + 1,
             "best_validation_accuracy": best_val_accuracy,
-            "best_validation_loss": best_val_loss,
-            "test_metrics": [test_metrics]
+            "best_validation_loss": best_val_loss
         }
 
+class SiameseTrainer:
+    """Trainer for Siamese networks."""
+    
+    def __init__(self, model, train_dataset, val_dataset, config, results_manager):
+        """Initialize the Siamese trainer with model and datasets."""
+        self.model = model
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.config = config
+        self.results_manager = results_manager
+    
+    def train(self):
+        """Train the Siamese model."""
+        return train_siamese_network(
+            self.model, 
+            self.train_dataset, 
+            self.val_dataset, 
+            self.config, 
+            self.results_manager
+        )
+    
+    def test(self, test_dataset):
+        """Test the Siamese model on the provided test dataset."""
+        return evaluate_siamese_network(
+            self.model, 
+            test_dataset, 
+            self.config, 
+            self.results_manager
+        )
 
 def handle_special_architecture(architecture, model, train_dataset, val_dataset, test_dataset, config, results_manager):
     """
-    Handle special architectures with custom training routines.
+    Special handling for architectures that require custom training procedures.
     
-    Args:
-        architecture: Architecture name
-        model: The model instance
-        train_dataset: Training dataset
-        val_dataset: Validation dataset
-        test_dataset: Test dataset
-        config: Experiment configuration
-        results_manager: Results manager for logging metrics
-        
     Returns:
-        Dict: Results from training and testing
-        bool: Whether this architecture was handled specially
+        tuple: (results, was_handled) - results dictionary and whether architecture was handled
     """
-    if architecture == 'siamese':
-        # Handle Siamese network
-        training_results = train_siamese_network(model, train_dataset, val_dataset, config, results_manager)
+    try:
+        # Handle Siamese network specially
+        if architecture == "siamese":
+            if hasattr(model, 'forward_once') or hasattr(model, 'get_embedding'):
+                print(f"Using special handling for Siamese Network architecture")
+                
+                # Create Siamese trainer and train model
+                trainer = SiameseTrainer(model, train_dataset, val_dataset, config, results_manager)
+                results = trainer.train()
+                
+                # Special testing for Siamese network
+                print(f"Running specialized testing for Siamese Network...")
+                results = trainer.test(test_dataset)
+                
+                return results, True
         
-        # Evaluate on test set
-        test_metrics = evaluate_siamese_network(model, test_dataset, config, results_manager)
+        # Handle ArcFace network specially
+        elif architecture == "arcface":
+            if hasattr(model, 'arcface'):
+                print(f"Using special handling for ArcFace architecture")
+                
+                # Fix for ArcFaceTrainer - instantiate properly based on its constructor
+                # If it takes no arguments, create it first then set attributes
+                trainer = ArcFaceTrainer()
+                trainer.model = model
+                trainer.train_dataset = train_dataset
+                trainer.val_dataset = val_dataset
+                trainer.config = config
+                trainer.results_manager = results_manager
+                
+                # Train the model
+                results = trainer.train()
+                
+                # Test the model
+                print(f"Running specialized testing for ArcFace...")
+                results = trainer.test(test_dataset)
+                
+                return results, True
+                
+        # Add more special architecture handlers here
         
-        # Add test metrics to results
-        if 'test_metrics' not in training_results:
-            training_results['test_metrics'] = []
-        training_results['test_metrics'].append(test_metrics)
+        return None, False
+    
+    except Exception as e:
+        print(f"Error handling special architecture {architecture}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         
-        return training_results, True
-        
-    elif architecture == 'arcface':
-        # Handle ArcFace network
-        results = ArcFaceTrainer.train_arcface_network(
-            model, train_dataset, val_dataset, test_dataset, config, results_manager
-        )
-        return results, True
-        
-    # Not a special architecture
-    return None, False 
+        # End MLflow run if active to avoid "Run already active" errors
+        try:
+            if mlflow.active_run():
+                mlflow.end_run()
+                print(f"Ended active MLflow run due to error in special architecture handling")
+        except Exception as mlflow_err:
+            print(f"Error ending MLflow run: {mlflow_err}")
+            
+        return None, False 
